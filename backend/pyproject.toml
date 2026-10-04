@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "possession-cut"
+version = "2.0.0"
+description = "Turn a full game broadcast into a vertical cut of every scoring possession."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlmodel>=0.0.22",
+    "httpx>=0.27",
+    "anthropic>=0.60",
+    "numpy>=1.26",
+    "polars>=1.0",
+    "Pillow>=10.3",
+    "rapidocr-onnxruntime>=1.4.4",
+    "nba_api>=1.9",
+    "nflreadpy>=0.1",
+    "MLB-StatsAPI>=1.9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+include = ["possession_cut*"]
+
+[tool.setuptools.package-data]
+possession_cut = ["assets/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "video: needs ffmpeg and renders a synthetic broadcast (slower)",
+    "live: calls real external services (Claude, league APIs); opt in with -m live",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008"]
