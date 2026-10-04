@@ -86,8 +86,17 @@ def stream_roi(
     what keeps a 2.5 hour broadcast inside the analysis budget.
     """
     x, y, w, h = roi
+    # ffmpeg crops chroma-subsampled video on even pixels only: an odd offset or size is
+    # silently rounded, and the raw frames coming out are then not the size we asked for.
+    # So crop an even-aligned box around the ROI and take the exact ROI out of it here.
+    ex, ey = x - x % 2, y - y % 2
+    ew = min(probe.display_width - ex, (x + w - ex) + (x + w - ex) % 2)
+    eh = min(probe.height - ey, (y + h - ey) + (y + h - ey) % 2)
+    ew, eh = ew - ew % 2, eh - eh % 2
+    ox, oy = x - ex, y - ey
+    w, h = min(w, ew - ox), min(h, eh - oy)
     filters = [f for f in [square_pixel_filter(probe)] if f]
-    filters.append(f"crop={w}:{h}:{x}:{y}")
+    filters.append(f"crop={ew}:{eh}:{ex}:{ey}")
     filters.append(f"fps={fps}:start_time=0:round=up")
     cmd = [ffmpeg_bin(), "-v", "error", "-nostdin", *_hwaccel_args()]
     if threads:
@@ -97,7 +106,7 @@ def stream_roi(
         cmd += ["-t", f"{duration:.3f}"]
     cmd += ["-i", probe.path, "-an", "-sn", "-dn", "-vf", ",".join(filters),
             "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
-    size = w * h * 3
+    size = ew * eh * 3
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=size * 4)
     assert proc.stdout is not None
     expected = None if duration is None else int(round(duration * fps))
@@ -107,7 +116,8 @@ def stream_roi(
             buf = proc.stdout.read(size)
             if len(buf) < size:
                 break
-            yield start + k / fps, np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+            frame = np.frombuffer(buf, dtype=np.uint8).reshape(eh, ew, 3)
+            yield start + k / fps, frame[oy : oy + h, ox : ox + w]
             k += 1
     finally:
         if proc.poll() is None:

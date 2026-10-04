@@ -108,6 +108,20 @@ def test_roi_stream_samples_land_on_their_timestamps(coverage_video, start):
 
 
 @pytest.mark.video
+@pytest.mark.parametrize("roi", [(333, 641, 665, 45), (101, 77, 51, 33), (0, 0, 64, 32), (1215, 687, 65, 33)])
+def test_roi_stream_returns_exactly_the_pixels_asked_for(coverage_video, roi):
+    """Odd offsets and sizes: ffmpeg rounds those for subsampled video unless we handle it."""
+    path, _ = coverage_video
+    p = probe_file(path)
+    x, y, w, h = roi
+    full = extract_frame(p, 20.0)
+    ((t, crop),) = list(stream_roi(p, roi, 2.0, 20.0, 0.5))
+    assert t == 20.0 and crop.shape == (h, w, 3)
+    diff = np.abs(crop.astype(int) - full[y : y + h, x : x + w].astype(int))
+    assert diff.mean() < 2.0, "same pixels as the full frame at that position"
+
+
+@pytest.mark.video
 def test_roi_stream_stops_at_end_of_file(coverage_video):
     path, _ = coverage_video
     p = probe_file(path)

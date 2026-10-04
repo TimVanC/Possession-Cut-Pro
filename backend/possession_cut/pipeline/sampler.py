@@ -26,6 +26,10 @@ from .ocr import OcrEngine
 from .probe import Probe
 
 CHUNK_SECONDS = 150.0
+# Bug crops of samples whose score did not read cleanly are kept (in memory, capped) so
+# the Claude fallback can look at them without decoding the file a second time.
+KEEP_CROPS_MAX = 2500
+LOW_CONF = 0.5
 
 
 @dataclass
@@ -39,6 +43,7 @@ class RawSamples:
     texts: dict[str, list[str]] = field(default_factory=dict)
     confs: dict[str, np.ndarray] = field(default_factory=dict)
     stats: dict = field(default_factory=dict)
+    crops: dict[int, np.ndarray] = field(default_factory=dict)  # sample index -> bug crop (not persisted)
 
     def __len__(self) -> int:
         return len(self.t)
@@ -110,6 +115,8 @@ def sample_bug(
     lock = threading.Lock()
     t_start = time.time()
     totals = {"ocr_calls": 0, "cache_hits": 0}
+    kept: dict[float, np.ndarray] = {}
+    score_fields = [n for n in ("away_score", "home_score") if n in names]
 
     def reader() -> BugReader:
         r = getattr(local, "reader", None)
@@ -132,6 +139,10 @@ def sample_bug(
                 break
             read = r.read(crop, state)
             rows.append((t, read))
+            if read.visible and len(kept) < KEEP_CROPS_MAX and any(
+                not read.fields[n].text or read.fields[n].conf < LOW_CONF for n in score_fields if n in read.fields
+            ):
+                kept[t] = crop.copy()
             with lock:
                 done += 1
                 if progress and done % 50 == 0:
@@ -156,11 +167,13 @@ def sample_bug(
         texts={name: [""] * n for name in names},
         confs={name: np.zeros(n, dtype=np.float32) for name in names},
     )
-    for i, (_, read) in enumerate(rows):
+    for i, (t_i, read) in enumerate(rows):
         for name, fr in read.fields.items():
             if name in raw.texts:
                 raw.texts[name][i] = fr.text
                 raw.confs[name][i] = fr.conf
+        if t_i in kept:
+            raw.crops[i] = kept[t_i]
     elapsed = time.time() - t_start
     raw.stats = {
         "samples": n,
@@ -169,6 +182,7 @@ def sample_bug(
         "ocr_calls": totals["ocr_calls"],
         "cache_hits": totals["cache_hits"],
         "workers": workers,
+        "low_confidence_samples": len(raw.crops),
     }
     if progress:
         progress(1.0, f"Read {n} samples in {elapsed:.0f}s")

@@ -160,3 +160,48 @@ Finalized at the end of the build; sections are filled in as each step lands.
   only part that calls league APIs, but the worker handles one job at a time, and a lookup
   queued behind a 10 minute analysis would freeze the New Job form. Play-by-play for
   analysis is still fetched by the worker.
+
+### Export (step 7)
+
+- **One ffmpeg run, one encode.** Each segment is its own seeked input (`-ss` before `-i`,
+  which is frame accurate when transcoding), trimmed in a filter graph, concatenated,
+  cropped, scaled to 1080 wide and padded to 1080x1920. The PRD says "a generated concat
+  list"; the concat *demuxer* cannot cut on exact frames or crossfade audio, so the list
+  is a list of seeked inputs feeding the concat *filter* instead. Same single pass.
+- **Seeks are biased half a frame early and trims sit half a frame before the wanted
+  frame**, so float rounding can never take the neighbouring frame. Verified: every
+  exported frame's barcode equals the planned source frame, in order.
+- **Audio crossfade is 2 whole frames wide** (66.7 ms at 30 fps, 80 ms at 25, 83 ms at 24),
+  inside the PRD's 60 to 100 ms. Each segment's audio is taken one frame longer on both
+  sides and each crossfade removes exactly that, so audio and video stay the same length
+  through any number of cuts. Verified with the synthetic beeps landing on their baskets.
+- **Title and caption are rendered to a transparent PNG with Pillow and overlaid**, not
+  drawn with ffmpeg `drawtext`. Any title text works (quotes, colons, percent signs) and
+  no font path has to be escaped on Windows. Font: Arial Bold / Segoe UI Bold on Windows,
+  Arial Bold / Helvetica on macOS, DejaVu Sans Bold in Docker. The title sits at the
+  bottom of the top bar, just above the picture, clear of phone UI at the top of the screen.
+- **More than 48 segments render in batches** (x264 video + lossless audio), then the
+  batches are joined with video stream copy and a single AAC encode over the whole cut, so
+  there are no AAC seams. Batch joins get a 20 ms fade instead of a crossfade.
+- **Sources a browser cannot play** (MKV, TS, AC-3 audio, HEVC) get a preview proxy:
+  video copied if it is H.264, otherwise transcoded to 540p; audio to AAC. Review plays
+  the proxy; export always cuts from the original.
+- **Anamorphic and interlaced sources** are squared and deinterlaced (bwdif) in the export
+  graph. Not tested on real files of those kinds.
+- **Claude OCR fallback** re-reads only the samples between the last read of an old score
+  and the first read of a new one, stacked eight to a contact sheet, within the per-job
+  budget. It declines to run when over a quarter of samples read poorly (that is a
+  calibration problem). Tested with a stand-in for Claude only.
+- **Caption**: Claude writes it from the facts when available; otherwise a template that
+  states only what the data supports.
+
+### Benchmark (analysis speed)
+
+- `tools/benchmark_analysis.py --minutes 150 --height 1080` on this machine (i5-12600K,
+  6 workers): **147.5 minutes of 1080p analyzed in 7.1 minutes** (21x real time; 17,704
+  samples, 14,617 OCR calls, 98,041 cache hits), while another render was using the CPU.
+  The PRD target is under 15 minutes.
+- The first benchmark run exposed a real bug: ffmpeg silently rounds odd crop offsets on
+  4:2:0 video, so at 1080p the raw frames coming back were not the size requested and
+  every sample was garbage. The sampler now crops an even-aligned box and slices the
+  exact region out of it. A test covers odd offsets and sizes.
