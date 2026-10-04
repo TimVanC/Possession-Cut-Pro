@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     )
 
     anthropic_api_key: str = ""
+    # Needed only for keys that are not scoped to a workspace (sent as anthropic-workspace-id).
+    anthropic_workspace_id: str = ""
     claude_model: str = "claude-sonnet-5-5"
     claude_budget_per_job_usd: float = 2.0
     ocr_sample_fps: float = 2.0
