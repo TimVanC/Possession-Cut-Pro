@@ -75,6 +75,14 @@ def main() -> int:
     parser.add_argument("--reload", action="store_true", help="uvicorn auto-reload")
     args = parser.parse_args()
 
+    # Child processes print characters a Windows console code page cannot encode
+    # (Vite's arrows); never let that kill the log pump.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     settings = get_settings()
     settings.ensure_dirs()
     try:

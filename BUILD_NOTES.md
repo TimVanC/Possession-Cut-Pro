@@ -205,3 +205,48 @@ Finalized at the end of the build; sections are filled in as each step lands.
   4:2:0 video, so at 1080p the raw frames coming back were not the size requested and
   every sample was garbage. The sampler now crops an even-aligned box and slices the
   exact region out of it. A test covers odd offsets and sizes.
+
+### App: worker, API, frontend (step 8)
+
+- **Job queue is the jobs table.** `Job.task` holds what is queued (calibrate / analyze /
+  export); the worker claims one at a time and writes progress back to the row. No broker.
+  A worker that dies mid-task requeues it on restart. Each job keeps `logs/worker.log`.
+- **Status flow:** draft -> calibrating -> ready -> analyzing -> review -> exporting -> done,
+  with failed from anywhere. A failed or cancelled task puts the job back where it was.
+- **Re-analysis is cheap.** Bug reads are cached against the calibration, so changing the
+  team, start point or toggles and re-running takes seconds, not minutes.
+- **Progress uses server-sent events** (`GET /api/jobs/{id}/events`), which close themselves
+  five seconds after a job goes idle; the browser reconnects while it cares.
+- **Two things run in the API process on purpose** (the PRD puts all work in the worker):
+  game lookup, and the calibration screen's live OCR read-out on frames already extracted.
+  Both need to answer in under a second while the worker may be busy for minutes.
+- **File picker** lists only folders and video files under `ALLOWED_ROOTS` (plus inbox and
+  exports). Files are registered by path; nothing is uploaded.
+- **Inbox** is polled every 10 s by the worker; a file becomes a draft once its size is the
+  same on two polls in a row.
+- **Delete** removes the job row, its clips and its artifact folder. It never touches the
+  source file or anything in `exports/`.
+- **Review player** plays the source file (or its proxy) through `/api/media` with the crop
+  applied in CSS, exactly as the PRD describes, so review is instant. A requestAnimationFrame
+  loop keeps playback inside each clip's kept segments (hopping over cut-out stretches) and
+  drives "play from here through the end".
+- **Calibration screen** has two editors: the bug zoomed (to adjust field boxes precisely)
+  and the whole frame (bug box and export crop). Moving the bug carries its fields with it.
+  The crop follows the PRD rule as the bug box moves unless its sides are dragged.
+- **Hosted frontend (Vercel).** `frontend/vercel.json` deploys the static frontend only.
+  The page looks for an engine on its own origin first, then at `http://127.0.0.1:8000`.
+  For a hosted copy to reach the local engine, set `CORS_ORIGINS=https://<your-app>.vercel.app`
+  in `.env`. The backend is not deployed anywhere: it needs local files, ffmpeg and a
+  long-running worker, and an unauthenticated public copy would expose the file browser.
+- **No database migrations.** The schema is created on first run. If a later version
+  changes a table, delete `data/possession_cut.db` (jobs are lost, templates too).
+
+### UI run-through on the synthetic game (step 11, done early)
+
+Driven through the real UI in a browser: dropped the file in `inbox/`, opened the draft,
+checked that game lookup returns the real 2026-06-10 Finals game, saved the setup,
+calibration found the bug at 100% with no adjustment, confirmed, analysis produced 9 clips
+with 0 unmatched plays, toggled one clip off and nudged its in and out points with the
+keyboard, reloaded (edits were still there), played the cut in sequence (the disabled clip
+was skipped and the gap between two free throws was hopped), exported. `tools/verify_export.py`
+then passed 23 of 23 checks on that file, including the frame-by-frame barcode check.

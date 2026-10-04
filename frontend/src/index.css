@@ -1,1 +1,135 @@
 @import "tailwindcss";
+
+@theme {
+  --color-ink-950: #0a0b0d;
+  --color-ink-900: #111317;
+  --color-ink-850: #161920;
+  --color-ink-800: #1c2029;
+  --color-ink-700: #272c38;
+  --color-ink-600: #3a4152;
+  --color-ink-400: #7b8499;
+  --color-ink-300: #a3abbd;
+  --color-ink-100: #e6e9f0;
+  --color-court: #f58220;
+  --color-court-dim: #c4651a;
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-ink-600) transparent;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-ink-700);
+  background: var(--color-ink-800);
+  padding: 0.45rem 0.85rem;
+  font-weight: 500;
+  color: var(--color-ink-100);
+  transition: background 120ms, border-color 120ms, opacity 120ms;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  background: var(--color-ink-700);
+  border-color: var(--color-ink-600);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: var(--color-court);
+  border-color: var(--color-court);
+  color: #1a0f04;
+  font-weight: 600;
+}
+.btn-primary:hover:not(:disabled) {
+  background: #ff9438;
+  border-color: #ff9438;
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #5b1d1d;
+  border-color: #8b2c2c;
+}
+.btn-sm {
+  padding: 0.25rem 0.55rem;
+  font-size: 12px;
+  border-radius: 0.4rem;
+}
+
+.field {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-ink-700);
+  background: var(--color-ink-900);
+  padding: 0.45rem 0.65rem;
+  color: var(--color-ink-100);
+  outline: none;
+}
+.field:focus {
+  border-color: var(--color-court);
+}
+select.field {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-ink-400) 50%),
+    linear-gradient(135deg, var(--color-ink-400) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 1.8rem;
+}
+
+.panel {
+  border-radius: 0.75rem;
+  border: 1px solid var(--color-ink-800);
+  background: var(--color-ink-900);
+}
+
+.label {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-ink-400);
+}
+
+kbd {
+  border-radius: 0.3rem;
+  border: 1px solid var(--color-ink-600);
+  background: var(--color-ink-800);
+  padding: 0 0.35rem;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--color-ink-300);
+}
