@@ -140,6 +140,9 @@ class ScoreEvent:
     score_home: int
     possession_start: float | None = None
     start_cause: str | None = None
+    # False when the bug gives no signal for this possession change (shot clock off before
+    # and after, so nothing jumps): the PRD's start rule cannot see it.
+    start_observable: bool = True
     trip: int | None = None
     and_one_of: int | None = None
     scorer: str = ""
@@ -313,6 +316,7 @@ class GameScript:
                     "score_home": last.score_home,
                     "possession_start": round(fg.possession_start, 3) if fg else None,
                     "start_cause": fg.start_cause if fg else None,
+                    "start_observable": fg.start_observable if fg else True,
                     "visible_times": [round(e.visible_time, 3) for e in events],
                     "segments": [[round(a, 3), round(b, 3)] for a, b in clip["segments"]],
                     "src_in": round(clip["segments"][0][0], 3),
@@ -549,6 +553,8 @@ class ScriptBuilder:
 
     def possession(self, team: str, dur: float | None, outcome: str, **kw) -> None:
         # 1. the possession starts
+        observable = True
+        shown_before = format_shot_clock(self.sc)
         if self.situation == "after_make":
             wait = max(0.0, self.inbound_at - self.t)
             if self.clock_running and wait >= self.clock:
@@ -556,9 +562,13 @@ class ScriptBuilder:
                 return
             self._advance(wait)
             start, cause = self.t, "after_make"
-            if not self.clock_running:
+            was_stopped = not self.clock_running
+            if was_stopped:
                 self._set_clock(True)
             self._set_shot(24.0, True)
+            # with the shot clock off and the game clock running, only the opponent's
+            # score marks this possession, and that shows before the inbound
+            observable = self.sc is not None or was_stopped
         elif self.situation == "dead":
             start, cause = self.t, "clock_start"
             self._set_clock(True)
@@ -566,9 +576,11 @@ class ScriptBuilder:
         elif self.situation == "live":
             start, cause = self.t, self.live_cause
             self._set_shot(24.0, True)
+            observable = shown_before != format_shot_clock(self.sc)
         elif self.situation == "off_reb":
             start, cause = self.t, "off_rebound"
             self._set_shot(14.0, True)
+            observable = shown_before != format_shot_clock(self.sc)
         else:  # pragma: no cover
             raise ScriptError(f"unknown situation {self.situation}")
         self.possession_starts.append((start, team, cause))
@@ -590,7 +602,8 @@ class ScriptBuilder:
         if outcome in ("make2", "make3", "and1_2", "and1_3"):
             points = 3 if outcome.endswith("3") else 2
             ev = self._record_score(
-                team, points, "fg", anim=kw.get("anim"), possession_start=start, start_cause=cause
+                team, points, "fg", anim=kw.get("anim"), possession_start=start, start_cause=cause,
+                start_observable=observable,
             )
             self._set_shot(24.0, False)
             if outcome.startswith("and1"):
@@ -613,8 +626,9 @@ class ScriptBuilder:
             self.live_cause = "def_rebound" if outcome == "miss_def" else "steal"
             self.ball = other(team)
         elif outcome == "miss_off":
-            if self.sc is not None and self.sc >= 14.0:
-                raise ScriptError("offensive rebound with 14+ on the shot clock would not reset it")
+            if self.sc is not None and self.sc > 13.0:
+                # above 13.0 the bug already reads 14, so the reset would be invisible
+                raise ScriptError("offensive rebound needs the shot clock at 13 or less to show a reset")
             self.situation = "off_reb"
             self.ball = team
         elif outcome == "dead_turnover":
@@ -801,8 +815,8 @@ def random_game(
 
             lo = 4.0
             if outcome == "miss_off":
-                # the shot clock must be under 14 for the rebound to reset it
-                lo = max(lo, shot - 13.0)
+                # the shot clock must read 13 or less for the reset to 14 to be visible
+                lo = max(lo, shot - 12.5)
                 if b.situation == "off_reb" or lo > longest or avail < lo + 12.0:
                     outcome, kw, lo = "miss_def", {}, 4.0
             if longest < lo + 0.5:

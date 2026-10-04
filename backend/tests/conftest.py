@@ -103,6 +103,35 @@ def coverage_calibration(coverage_video, coverage_probe, ocr_engine):
     return cal, ref, mask, job_dir
 
 
+@pytest.fixture(scope="session")
+def coverage_raw(coverage_calibration, coverage_probe):
+    """OCR samples of the whole coverage video at 2 fps (the real sampler), cached on disk."""
+    from possession_cut.pipeline.sampler import RawSamples, sample_bug
+    from possession_cut.sports import get_adapter
+
+    cal, ref, mask, job_dir = coverage_calibration
+    h = hashlib.sha256(_calibration_version().encode())
+    h.update((BACKEND / "possession_cut" / "pipeline" / "sampler.py").read_bytes())
+    path = job_dir / f"raw_{h.hexdigest()[:12]}.parquet"
+    if path.exists():
+        return RawSamples.load(path, 2.0)
+    raw = sample_bug(coverage_probe, cal, get_adapter("nba"), ref, mask, fps=2.0, workers=4)
+    raw.save(path)
+    return raw
+
+
+@pytest.fixture(scope="session")
+def coverage_analysis(coverage_raw):
+    """(timeline, events) for the coverage video from real OCR samples."""
+    from possession_cut.pipeline.events import detect_score_events
+    from possession_cut.pipeline.timeline import build_timeline
+    from possession_cut.sports import get_adapter
+
+    adapter = get_adapter("nba")
+    tl = build_timeline(coverage_raw, adapter)
+    return tl, detect_score_events(tl, adapter)
+
+
 @pytest.fixture()
 def settings(tmp_path, monkeypatch):
     """Isolated Settings pointing every folder at a temp dir, with no API key."""

@@ -76,3 +76,59 @@ Finalized at the end of the build; sections are filled in as each step lands.
   (`output_config.format`), adaptive thinking at low/medium effort, and server-side refusal
   fallback (`fallbacks: "default"`), falling back to a plain request if the account does
   not accept that beta.
+
+### Timeline, events and clip boundaries (steps 4 and 5)
+
+- **Cleaning is global, not greedy.** "Scores never decrease, the clock only runs down" is
+  enforced by keeping the longest consistent chain of reads (longest non-decreasing
+  subsequence over game time; a weighted version over score runs). A single confident
+  misread therefore cannot poison everything after it, which a running-maximum would.
+- **Replays that re-air the bug** are caught two ways: the clock sitting behind the game
+  for 3+ samples, or the score sitting below one that already held. A new score that
+  shows for two samples, is followed by a replay of the old score, then returns, is
+  stamped at its first showing.
+- **Known limit:** the last second or two of a bug-carrying replay can show exactly the
+  live state (same stopped clock, same score). The bug cannot tell that apart from live.
+  It does not land in a clip unless a free throw is made within 3 s of the replay ending.
+  Fixing it properly needs scene-cut detection on the picture, which is not built.
+- **Possession start, as built** = latest of four signals, minus 1 s pre-roll:
+  1. shot clock jumping up to 24/14, taken at the moment it starts counting down again
+     (after an opponent basket the shot clock sits on 24 until the inbound, and the
+     inbound is the real start);
+  2. game clock starting after a stoppage of 2.4 s or more;
+  3. the opponent's score appearing (no pre-roll here, so their make is not shown);
+  4. the followed team's own previous score (a possession cannot start before it).
+  Two additions to the PRD's three signals: number 4, and the shot clock switching off
+  in the last 24 s of a period, which marks a possession change.
+- **Signals within 2.5 s of the score appearing are ignored**, because the make itself
+  resets the shot clock and the bug shows the score 0.5 to 2 s later.
+- **Free throw vs basket:** +1 is a free throw. +2/+3 with the clock stopped for 3.5 s
+  beforehand is a trip to the line whose first make was not seen, and is clipped as free
+  throws with a warning. A basket in the last two minutes (clock stops on the make) is
+  not mistaken for one.
+- **And-one:** a free throw by the same team, next score in the game, clock within 1 s of
+  where the basket left it, rides on the basket clip as a trailing 4 s segment.
+- **Clips have segments.** `Clip.segments` holds the kept ranges; `src_in`/`src_out` are
+  the outer bounds. Needed for free-throw trips, and-ones, and any not-live stretch cut
+  out of the middle.
+- **Not-live cut-outs are conservative**: widened to the neighbouring live samples (up to
+  0.5 s each side), so no frame of a replay or commercial can leak in.
+- **A score first seen after a break** (the broadcast cut away before the bug updated)
+  ends its clip at the cutaway rather than after it.
+- **Unobservable possession changes.** With the shot clock off before and after (last
+  24 s of a period), a rebound or steal leaves no trace on the bug. Those clips start at
+  the previous visible signal, up to the 30 s cap, and may merge with the team's previous
+  clip. The synthetic ground truth flags these (`start_observable: false`) and they are
+  graded on "contains the whole possession" instead of the 1.5 s start tolerance.
+- **Shot clock reads are validated against physics**: it counts down in real time, holds,
+  or jumps to a reset value. Anything else is blanked unless it persists for 2 s. A reset
+  must land on 24 or 14 and be followed by a consistent read.
+
+### Verification so far
+
+- Logic on simulated perfect reads: 120 random team-games, 1,774 clips, 0 problems; starts
+  land 0.0 to 1.4 s before the scripted possession start (target is 1.0), ends within 0.5 s.
+- With 1% and 3% of all reads randomly corrupted: every score still found, no false clips,
+  no not-live leaks, starts within 2.5 s and ends within 2 s. At 6% it degrades.
+- On the rendered video with real OCR: home 9/9 and away 5/5 clips, 0 false, 0 leaks,
+  start errors -1.1 to -0.6 s, end errors under 0.5 s.

@@ -107,6 +107,9 @@ class SportAdapter(ABC):
     # Largest single scoring play, used to sanity-check score jumps.
     max_points_per_event: int = 3
     period_label: str = "Q"
+    # Shot/play clock: its largest value and the values it is reset to. Empty = any.
+    shot_clock_max: float = 24.0
+    shot_clock_resets: tuple[float, ...] = ()
 
     # -- league data -----------------------------------------------------
     @abstractmethod
