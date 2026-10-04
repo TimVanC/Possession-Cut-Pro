@@ -41,6 +41,9 @@ class ClipDraft:
     start_cause: str = ""
     confidence: float = 1.0
     warnings: list[str] = field(default_factory=list)
+    scorer: str = ""
+    description: str = ""
+    pbp_event_id: str | None = None
 
     @property
     def src_in(self) -> float:

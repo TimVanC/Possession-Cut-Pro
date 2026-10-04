@@ -132,3 +132,31 @@ Finalized at the end of the build; sections are filled in as each step lands.
   no not-live leaks, starts within 2.5 s and ends within 2 s. At 6% it degrades.
 - On the rendered video with real OCR: home 9/9 and away 5/5 clips, 0 false, 0 leaks,
   start errors -1.1 to -0.6 s, end errors under 0.5 s.
+
+### NBA data, matching, start point (step 6)
+
+- **Game lookup uses `scoreboardv3`** on stats.nba.com (works for any season, gives final
+  scores and labels such as "NBA Finals"). `scoreboardv2`, which nba_api wraps, returned
+  half-empty rows for the 2026 Finals, so it is not used.
+- **Play-by-play sources, in order:** cdn.nba.com liveData (recent seasons only; 403 for
+  e.g. 2016), stats.nba.com `playbyplayv3` (all seasons), then the same endpoint through
+  `nba_api` as a last resort. All with browser-like headers and retry with backoff, cached
+  per game ID under `data/cache/nba/`. `nba_api` also supplies the offline team list.
+- **Points are derived from the running score**, not from the action type, so both feeds
+  parse identically (a test checks the two recorded feeds agree play for play).
+- **Recorded fixtures:** real responses for 2026 Finals Game 4 (game ID `0042500404`,
+  SAS 106 @ NYK 107, 2026-06-10) are in `backend/tests/fixtures/nba/`.
+- **Matching runs three passes, strictest first:** running score + period + clock within
+  3 s; then the PRD rule alone (period + clock within 3 s + team + points), which covers a
+  misread score on the bug; then running score with the clock up to 30 s off, for a score
+  that showed late after a replay. A loose match can never take a play a strict one wanted.
+- **Auto start ("biggest run")** = the last opponent score that put the followed team down
+  by its largest deficit; the cut begins strictly after it. Resolved from play-by-play when
+  available, otherwise from the bug's own score track, and the two agree in tests.
+- **Sidecar play-by-play:** if `<video>.pbp.json` sits next to the source it is used instead
+  of the league API. That is how the synthetic game gets labels, and it works for games no
+  API covers.
+- **Game lookup runs in the API process**, not the worker. The PRD says the worker is the
+  only part that calls league APIs, but the worker handles one job at a time, and a lookup
+  queued behind a 10 minute analysis would freeze the New Job form. Play-by-play for
+  analysis is still fetched by the worker.
