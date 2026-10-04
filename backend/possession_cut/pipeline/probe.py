@@ -113,7 +113,14 @@ def parse_probe(path: str | Path, raw: dict) -> Probe:
     if min(height, display_width) < MIN_HEIGHT or height < MIN_HEIGHT:
         raise ProbeError(f"Video is {display_width}x{height}; files under 480p are rejected.")
 
-    rate = _rate(video.get("avg_frame_rate")) or _rate(video.get("r_frame_rate"))
+    average, nominal = _rate(video.get("avg_frame_rate")), _rate(video.get("r_frame_rate"))
+    # A file with a few dropped or duplicated frames averages to an odd rate (59.9399 for a
+    # 59.94 stream). Cut on the nominal grid then. Where the two really differ (interlaced
+    # field rate, true variable frame rate) the average is the one that describes the file.
+    if average and nominal and abs(average - nominal) / nominal < 0.002:
+        rate = nominal
+    else:
+        rate = average or nominal
     if rate is None:
         raise ProbeError("Could not determine the frame rate.")
     # limit_denominator keeps 30000/1001-style rates exact without absurd fractions

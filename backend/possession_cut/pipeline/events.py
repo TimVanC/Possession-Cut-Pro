@@ -8,6 +8,22 @@ from ..sports.base import ScoreChange, SportAdapter
 from .timeline import Timeline
 
 STOPPED_LOOKBACK = 3.5
+LAG_REACH = 4.5  # how far before a score showing to look for the stoppage it came out of
+HELD_SECONDS = 1.5
+
+
+def _stoppage_before(tl: Timeline, j: int) -> tuple[float, float | None]:
+    """The longest the game clock had been stopped at any sample in the LAG_REACH seconds
+    up to sample j, and the value it was stopped at (None if it was running)."""
+    best, value = 0.0, None
+    k = j
+    while k >= 0 and tl.t[j] - tl.t[k] <= LAG_REACH:
+        if tl.live[k] and not np.isnan(tl.clock[k]):
+            held = tl.stopped_duration(k)
+            if held > best:
+                best, value = held, float(tl.clock[k])
+        k -= 1
+    return best, (value if best >= HELD_SECONDS else None)
 
 
 def detect_score_events(tl: Timeline, adapter: SportAdapter) -> list[ScoreChange]:
@@ -34,6 +50,7 @@ def detect_score_events(tl: Timeline, adapter: SportAdapter) -> list[ScoreChange
                     and not np.isnan(clock_before)
                     and abs(clock - clock_before) < 0.05
                 )
+                stopped_before, clock_held = _stoppage_before(tl, j)
                 notes: list[str] = []
                 points = int(v - prev)
                 hidden_between = int((~tl.live[j + 1 : i]).sum())
@@ -59,6 +76,9 @@ def detect_score_events(tl: Timeline, adapter: SportAdapter) -> list[ScoreChange
                         score_away=int(v if side == "away" else (0 if np.isnan(o) else o)),
                         score_home=int(v if side == "home" else (0 if np.isnan(o) else o)),
                         clock_stopped=bool(stopped),
+                        stopped_for=tl.stopped_duration(i),
+                        stopped_before=stopped_before,
+                        clock_held=clock_held,
                         confidence=conf,
                         notes=notes,
                     )

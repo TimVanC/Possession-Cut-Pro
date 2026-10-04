@@ -199,7 +199,9 @@ def validate(
     static_ok = 1.0
     inside, outside = cal.checks.get("static_inside"), cal.checks.get("static_outside")
     if inside is not None and outside is not None:
-        static_ok = 1.0 if (inside >= 0.5 and inside - outside >= 0.2) else 0.6
+        # scores, clocks and status lines change, so a real bug is far from fully static;
+        # what matters is that it is clearly steadier than the picture around it
+        static_ok = 1.0 if (inside >= 0.35 and inside - outside >= 0.2) else 0.6
         if static_ok < 1.0:
             cal.warnings.append("The bug region does not stand out as static against its surroundings; check the box.")
     cal.confidence = round(
@@ -303,11 +305,15 @@ def calibrate(
             static_box, static = detector.static_region(visible, seed)
             if static_box is not None and iou(static_box, bug) >= 0.45:
                 bug = static_box
-            observations = detector.fine_text(visible, bug)
+            text_height = (clock_cluster.box[3] - clock_cluster.box[1]) if clock_cluster is not None else None
+            observations = detector.fine_text(visible, bug, text_height=text_height)
             from .calib_local import _cluster
 
             clusters = _cluster(observations)
             roles = snap_to_text(found.roles, clusters)
+            row = clock_cluster.box if clock_cluster is not None else roles.get("clock")
+            if row is not None:
+                roles = detector.snap_to_ink(roles, detector.ink_runs(visible, bug, row))
             warnings.extend(found.notes)
     elif claude is not None and claude.unavailable_reason:
         warnings.append(f"Claude vision was not used: {claude.unavailable_reason}")

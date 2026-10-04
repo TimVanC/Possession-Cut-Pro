@@ -38,6 +38,16 @@ def test_parse_probe_broadcast_ts_is_not_browser_playable():
     assert not p.browser_playable
 
 
+def test_near_nominal_average_rate_snaps_to_the_nominal_rate():
+    raw = _raw(rate="51848/865")  # what ffprobe reports as the average of a 59.94 file with a few odd frames
+    raw["streams"][0]["r_frame_rate"] = "60000/1001"
+    p = parse_probe("game.mp4", raw)
+    assert (p.fps_num, p.fps_den) == (60000, 1001)
+    interlaced = _raw(rate="30000/1001")  # field rate is double the frame rate: keep the average
+    interlaced["streams"][0]["r_frame_rate"] = "60000/1001"
+    assert parse_probe("game.ts", interlaced).fps == pytest.approx(29.97, abs=0.001)
+
+
 def test_export_fps_caps_at_60():
     assert float(parse_probe("a.mp4", _raw(rate="120/1")).export_fps) == 60.0
     assert float(parse_probe("a.mp4", _raw(rate="60000/1001")).export_fps) == pytest.approx(59.94, abs=0.01)

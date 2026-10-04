@@ -17,7 +17,7 @@ when Claude supplies the semantics.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import cv2
 import numpy as np
@@ -26,8 +26,19 @@ from .geometry import Box, box_area, expand, from_px, intersection, iou, to_px, 
 from .ocr import OcrEngine, TextBox, parse_period
 
 CLOCK_RE = re.compile(r"(?<![\d:.])(\d{1,2}:\d{2}|\d{1,2}\.\d)(?![\d:.])")
-MERGED_BEFORE_CLOCK = re.compile(r"^(.*?\S)\s+(\d{1,2}:\d{2}|\d{1,2}\.\d)$")
-MERGED_AFTER_CLOCK = re.compile(r"^(\d{1,2}:\d{2}|\d{1,2}\.\d)\s+(\S.*)$")
+# Anywhere inside a longer string: "2ND3:0020" holds the clock 3:00. Minutes are the one
+# or two digits before the colon, seconds the two after it.
+CLOCK_INSIDE = re.compile(r"(\d{1,2}):([0-5]\d)|(?<!\d)(\d{1,2})\.(\d)(?!\d)")
+# A whole text line that is really several fields: [period][clock][shot clock]
+MERGED_LINE = re.compile(
+    r"^(?P<before>.*?)\s*(?P<clock>\d{1,2}:[0-5]\d|(?<!\d)\d{1,2}\.\d)\s*(?P<after>\d{1,2})?$"
+)
+_OCR_DIGIT_FIXES = str.maketrans({"O": "0", "o": "0", "l": "1", "I": "1"})
+
+
+def _fix_digits(text: str) -> str:
+    """'1O:47' -> '10:47'. Only applied next to a colon or period, where digits are expected."""
+    return re.sub(r"[OolI](?=[:.\d])|(?<=[:.\d])[OolI]", lambda m: m.group(0).translate(_OCR_DIGIT_FIXES), text)
 ANALYSIS_HEIGHT = 720
 STATIC_STD = 11.0
 
@@ -38,6 +49,7 @@ class Obs:
     box: Box  # normalized to the frame
     text: str
     conf: float
+    split: bool = False  # carved out of a longer line, so its box is an estimate
 
 
 @dataclass
@@ -59,7 +71,9 @@ class Cluster:
 
     @property
     def union(self) -> Box:
-        return union([o.box for o in self.obs])
+        # boxes carved out of a merged line are estimates; use them only if nothing better
+        exact = [o.box for o in self.obs if not o.split]
+        return union(exact or [o.box for o in self.obs])
 
     @property
     def texts(self) -> list[str]:
@@ -104,29 +118,52 @@ def _center(box: Box) -> tuple[float, float]:
     return (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
 
 
+def _char_width(ch: str) -> float:
+    return 0.4 if ch in ":.,'" else (0.6 if ch == " " else 1.0)
+
+
 def _split_merged(obs: Obs) -> list[Obs]:
-    """'3rd 2:27' or '2:27 22' read as one line -> one observation per field."""
-    text = obs.text.strip()
-    for pattern in (MERGED_BEFORE_CLOCK, MERGED_AFTER_CLOCK):
-        m = pattern.match(text)
-        if not m:
-            continue
-        left, right = m.group(1), m.group(2)
-        gap = len(text) - len(left) - len(right)
-        total = len(left) + len(right) + gap
-        x0, y0, x1, y1 = obs.box
-        cut_a = x0 + (x1 - x0) * (len(left) / total)
-        cut_b = x0 + (x1 - x0) * ((len(left) + gap) / total)
-        return [
-            Obs(obs.frame, (x0, y0, cut_a, y1), left, obs.conf),
-            Obs(obs.frame, (cut_b, y0, x1, y1), right, obs.conf),
-        ]
-    return [obs]
+    """'3rd 2:27', '2:27 22' or '2ND3:0020' read as one line -> one observation per field.
+
+    The pieces' boxes are estimated from character widths, so they are marked as splits.
+    """
+    text = _fix_digits(obs.text.strip())
+    m = MERGED_LINE.match(text)
+    if not m:
+        return [replace(obs, text=text)] if text != obs.text else [obs]
+    before, clock, after = (m.group("before") or "").strip(), m.group("clock"), m.group("after") or ""
+    if not before and not after:
+        return [replace(obs, text=clock)]
+    widths = [_char_width(c) for c in text]
+    total = sum(widths) or 1.0
+    x0, y0, x1, y1 = obs.box
+
+    def span(start: int, end: int) -> Box:
+        a = sum(widths[:start]) / total
+        b = sum(widths[:end]) / total
+        return (x0 + (x1 - x0) * a, y0, x0 + (x1 - x0) * b, y1)
+
+    out: list[Obs] = []
+    c0 = text.index(clock, len(m.group("before") or ""))
+    if before:
+        out.append(Obs(obs.frame, span(0, len(m.group("before").rstrip())), before, obs.conf, split=True))
+    out.append(Obs(obs.frame, span(c0, c0 + len(clock)), clock, obs.conf, split=True))
+    if after:
+        a0 = text.rindex(after)
+        out.append(Obs(obs.frame, span(a0, len(text)), after, obs.conf, split=True))
+    return out
 
 
 def _cluster(observations: list[Obs], min_iou: float = 0.25) -> list[Cluster]:
+    """Group observations of the same field across frames.
+
+    Boxes straight from the detector go first and define the clusters. Pieces carved out
+    of a fused line (whose boxes are estimates) then join whichever cluster they overlap,
+    and only start clusters of their own when nothing exact covers that spot.
+    """
     clusters: list[Cluster] = []
-    for o in observations:
+
+    def place(o: Obs) -> None:
         best, best_score = None, 0.0
         for c in clusters:
             cb = c.box
@@ -140,6 +177,13 @@ def _cluster(observations: list[Obs], min_iou: float = 0.25) -> list[Cluster]:
             best.obs.append(o)
         else:
             clusters.append(Cluster([o]))
+
+    for o in observations:
+        if not o.split:
+            place(o)
+    for o in observations:
+        if o.split:
+            place(o)
     return clusters
 
 
@@ -172,15 +216,16 @@ class LocalDetector:
                 continue
             h, w = frame.shape[:2]
             for tb in boxes:
-                m = CLOCK_RE.search(tb.text)
+                text = _fix_digits(tb.text)
+                m = CLOCK_INSIDE.search(text)
                 if not m:
                     continue
                 # keep just the clock's share of a merged line
                 x0, y0, x1, y1 = tb.box
-                n = max(1, len(tb.text))
+                n = max(1, len(text))
                 cx0 = x0 + (x1 - x0) * (m.start() / n)
                 cx1 = x0 + (x1 - x0) * (m.end() / n)
-                observations.append(Obs(i, from_px((cx0, y0, cx1, y1), w, h), m.group(1), tb.conf))
+                observations.append(Obs(i, from_px((cx0, y0, cx1, y1), w, h), m.group(0), tb.conf, split=n > m.end() - m.start()))
         clusters = _cluster(observations, min_iou=0.2)
         clusters = [c for c in clusters if len(c.frames) >= 2]
         if not clusters:
@@ -230,6 +275,40 @@ class LocalDetector:
             x0 += 1
         while x1 - x0 > text_h and comp_mask[y0:y1, x1 - 1].mean() < 0.6:
             x1 -= 1
+        # The outer rim of a real bug (bevel, glow, a slightly see-through edge) varies a
+        # little more than its body. Grow each side while it is still clearly steadier than
+        # live picture, so the box takes in the whole graphic and not just its core.
+        # "Steadier than live picture" is judged against this video: halfway between how much
+        # the bug's body varies and how much the picture a little way off to the sides does.
+        inner = float(np.median(std[y0:y1, x0:x1]))
+        band = max(8, int(w * 0.05))
+        beyond = np.concatenate([
+            std[y0:y1, max(0, x0 - 2 * band) : max(0, x0 - band)].ravel(),
+            std[y0:y1, min(w, x1 + band) : min(w, x1 + 2 * band)].ravel(),
+        ])
+        outer = float(np.median(beyond)) if beyond.size else inner + 40.0
+        soft = inner + 0.45 * max(0.0, outer - inner)
+        grow_x, grow_y = int(w * 0.03), int(text_h * 0.5)
+        for _ in range(grow_x):
+            if x0 > 0 and std[y0:y1, x0 - 1].mean() < soft:
+                x0 -= 1
+            else:
+                break
+        for _ in range(grow_x):
+            if x1 < w and std[y0:y1, x1].mean() < soft:
+                x1 += 1
+            else:
+                break
+        for _ in range(grow_y):
+            if y0 > 0 and std[y0 - 1, x0:x1].mean() < soft:
+                y0 -= 1
+            else:
+                break
+        for _ in range(grow_y):
+            if y1 < h and std[y1, x0:x1].mean() < soft:
+                y1 += 1
+            else:
+                break
         return from_px((x0, y0, x1, y1), w, h), static
 
     def static_scores(self, static: np.ndarray | None, bug: Box) -> tuple[float, float]:
@@ -247,8 +326,20 @@ class LocalDetector:
         return inside, float(total / area) if area > 0 else 0.0
 
     # -- pass 3 ------------------------------------------------------------
-    def fine_text(self, visible: list[int], bug: Box, source_frames: list[np.ndarray | None] | None = None) -> list[Obs]:
-        """Zoom into the bug on each visible frame and read it field by field."""
+    def fine_text(
+        self,
+        visible: list[int],
+        bug: Box,
+        source_frames: list[np.ndarray | None] | None = None,
+        text_height: float | None = None,
+    ) -> list[Obs]:
+        """Zoom into the bug on each visible frame and read it field by field.
+
+        ``text_height`` is the height of the bug's text as a fraction of the frame (from
+        the clock found in the coarse pass). The zoom is chosen from it, because how big
+        the text is relative to the bug varies (one-row bugs, two-row bugs). Fields that
+        fuse at one zoom often separate at another, so two zooms are read.
+        """
         out: list[Obs] = []
         frames = source_frames or self.frames
         for i in visible:
@@ -257,21 +348,22 @@ class LocalDetector:
                 continue
             h, w = frame.shape[:2]
             bh = bug[3] - bug[1]
-            region = expand(bug, 0.01, bh * 0.6)
+            region = expand(bug, 0.01, bh * 0.35)
             rx0, ry0, rx1, ry1 = to_px(region, w, h)
             crop = frame[ry0:ry1, rx0:rx1]
-            bug_h_px = max(8.0, bh * h)
-            scale = float(np.clip(96.0 / bug_h_px, 1.0, 4.0))
-            if crop.shape[1] * scale > 1900:
-                scale = 1900 / crop.shape[1]
-            zoom = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            for tb in self.engine.read_text(zoom, strip=True):
-                x0, y0, x1, y1 = (v / scale for v in tb.box)
-                box = from_px((rx0 + x0, ry0 + y0, rx0 + x1, ry0 + y1), w, h)
-                cx, cy = _center(box)
-                if not (bug[0] <= cx <= bug[2] and bug[1] <= cy <= bug[3]):
-                    continue
-                out.extend(_split_merged(Obs(i, box, tb.text, tb.conf)))
+            text_px = max(8.0, (text_height or bh * 0.6) * h)
+            for target in (46.0, 68.0):
+                scale = float(np.clip(target / text_px, 1.0, 4.0))
+                if crop.shape[1] * scale > 2300:
+                    scale = 2300 / crop.shape[1]
+                zoom = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+                for tb in self.engine.read_text(zoom, strip=True):
+                    x0, y0, x1, y1 = (v / scale for v in tb.box)
+                    box = from_px((rx0 + x0, ry0 + y0, rx0 + x1, ry0 + y1), w, h)
+                    cx, cy = _center(box)
+                    if not (bug[0] <= cx <= bug[2] and bug[1] <= cy <= bug[3]):
+                        continue
+                    out.extend(_split_merged(Obs(i, box, tb.text, tb.conf)))
         return out
 
     def assign_roles(
@@ -303,9 +395,19 @@ class LocalDetector:
                 roles["period"] = period
                 used.add(id(period))
 
+        def label_rank(c: Cluster) -> tuple:
+            name = max(set(c.texts), key=c.texts.count).strip().upper()
+            wanted = [v.upper() for v in (expected_teams or {}).values() if v]
+            known = any(name == w or (len(name) >= 2 and (w.startswith(name) or name.startswith(w))) for w in wanted)
+            same_row = False
+            if clock is not None:
+                cy = _center(c.box)[1]
+                same_row = clock.box[1] - 0.25 * (clock.box[3] - clock.box[1]) <= cy <= clock.box[3] + 0.25 * (clock.box[3] - clock.box[1])
+            return (known, same_row, len(c.frames))
+
         labels = sorted(
             (c for c in clusters if id(c) not in used and c.frac(_is_label) >= 0.6),
-            key=lambda c: -len(c.frames),
+            key=label_rank, reverse=True,
         )[:2]
         numeric = [c for c in clusters if id(c) not in used and c.frac(_is_number) >= 0.7]
 
@@ -384,6 +486,70 @@ class LocalDetector:
         boxes = {name: c.union for name, c in roles.items() if name in field_names}
         return boxes, teams, clusters, notes
 
+    # -- ink ---------------------------------------------------------------
+    def ink_runs(self, visible: list[int], bug: Box, row: Box) -> list[tuple[float, float]]:
+        """Where there is text along the bug's main row, as (x0, x1) frame fractions.
+
+        Text detectors fuse neighbouring fields unpredictably ("7:5213"). The pixels do not:
+        across the frames that show the bug, a column that never has ink is a gap between
+        fields. A column has ink when something in the text rows differs sharply from that
+        same column just above and below the text. Comparing within a column is what makes
+        this blind to the bug's own artwork: a boundary between two coloured blocks runs
+        through the text rows and their margins alike, so it does not count.
+        """
+        frames = [self.frames[i] for i in visible if self.frames[i] is not None]
+        if not frames:
+            return []
+        h, w = frames[0].shape[:2]
+        bx0, by0, bx1, by1 = to_px(bug, w, h)
+        _, ry0, _, ry1 = to_px(row, w, h)
+        text_h = max(6, ry1 - ry0)
+        top = [y for y in range(ry0 - 2, ry0 + 1) if by0 <= y < by1]
+        bottom = [y for y in range(ry1, ry1 + 3) if by0 <= y < by1]
+        margin = top + bottom
+        if not margin or ry1 - ry0 < 4:
+            return []
+        deviation = np.zeros(bx1 - bx0, dtype=np.float32)
+        for frame in frames:
+            gray = cv2.cvtColor(frame[:, bx0:bx1], cv2.COLOR_BGR2GRAY).astype(np.float32)
+            background = np.median(gray[margin], axis=0)
+            deviation = np.maximum(deviation, np.abs(gray[ry0 + 1 : ry1] - background[None, :]).max(axis=0))
+        if deviation.max() < 40.0:
+            return []
+        ink = deviation > max(35.0, 0.4 * float(np.percentile(deviation, 98)))
+        runs: list[list[int]] = []
+        for x in np.flatnonzero(ink):
+            if runs and x - runs[-1][1] <= 1:
+                runs[-1][1] = int(x)
+            else:
+                runs.append([int(x), int(x)])
+        # letters of one word sit closer together than fields do
+        word_gap = max(3, int(round(text_h * 0.3)))
+        words: list[list[int]] = []
+        for r in runs:
+            if words and r[0] - words[-1][1] <= word_gap:
+                words[-1][1] = r[1]
+            else:
+                words.append(list(r))
+        # a sliver on its own is artwork (the end of a rounded box), not a field
+        words = [r for r in words if r[1] - r[0] + 1 >= max(4, int(text_h * 0.3))]
+        return [((bx0 + a) / w, (bx0 + b + 1) / w) for a, b in words]
+
+    @staticmethod
+    def snap_to_ink(roles: dict[str, Box], runs: list[tuple[float, float]]) -> dict[str, Box]:
+        """Set each field's left and right edge from the ink it actually covers."""
+        out: dict[str, Box] = {}
+        for name, (x0, y0, x1, y1) in roles.items():
+            mine = [
+                (a, b) for a, b in runs
+                if min(b, x1) - max(a, x0) >= 0.5 * (b - a)  # most of that word lies in this box
+            ]
+            if mine:
+                out[name] = (min(a for a, _ in mine), y0, max(b for _, b in mine), y1)
+            else:
+                out[name] = (x0, y0, x1, y1)
+        return out
+
     # -- all together --------------------------------------------------------
     def detect(self, field_names: list[str], expected_teams: dict[str, str] | None = None) -> LocalDetection | None:
         clock_cluster, visible = self.find_clock_row()
@@ -401,8 +567,10 @@ class LocalDetector:
             th = clock_cluster.box[3] - clock_cluster.box[1]
             row = [b for b in row if abs(_center(b)[1] - cy) < th]
             bug = expand(union(row), 0.01, th * 0.3) if row else expand(clock_cluster.box, 0.2, th)
-        observations = self.fine_text(visible, bug)
+        text_height = clock_cluster.box[3] - clock_cluster.box[1]
+        observations = self.fine_text(visible, bug, text_height=text_height)
         roles, teams, clusters, role_notes = self.assign_roles(observations, field_names, expected_teams)
+        roles = self.snap_to_ink(roles, self.ink_runs(visible, bug, clock_cluster.box))
         inside, outside = self.static_scores(static, bug)
         return LocalDetection(visible, bug, roles, teams, clusters, inside, outside, notes + role_notes)
 

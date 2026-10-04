@@ -96,7 +96,12 @@ def test_cutlist_follows_prd_rules(coverage_script):
             assert 3.0 <= first[1] - first[0] <= 30.0
     ft = clips[2]
     assert ft["points"] == 2 and len(ft["segments"]) == 2
-    assert all(b - a == pytest.approx(4.0, abs=0.01) for a, b in ft["segments"])
+    # each free throw: 2 s before the ball drops to about 2 s after, the score showing by the end
+    made = [e for e in g.events if e.team == HOME and e.kind == "ft" and e.and_one_of is None][:2]
+    for (a, b), ev in zip(ft["segments"], made, strict=True):
+        assert a == pytest.approx(ev.make_time - 2.0, abs=0.01)
+        assert ev.visible_time + 0.5 - 0.01 <= b <= ev.visible_time + 1.0 + 0.01
+        assert 3.5 <= b - a <= 4.5
     and_one = clips[3]
     assert and_one["points"] == 3 and len(and_one["segments"]) == 2, "and-one FT rides on its basket clip"
 

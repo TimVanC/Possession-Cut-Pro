@@ -1,0 +1,23 @@
+services:
+  possession-cut:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # paths inside the container; the values in .env are for running without Docker
+      API_HOST: 0.0.0.0
+      INBOX_DIR: /app/inbox
+      DATA_DIR: /app/data
+      EXPORTS_DIR: /app/exports
+      ALLOWED_ROOTS: /games
+    volumes:
+      - ./inbox:/app/inbox
+      - ./data:/app/data
+      - ./exports:/app/exports
+      # Folder with your game files, shown in the file picker as /games. Read-only: the app
+      # never writes to it. Change the left side to wherever your recordings live.
+      - ${GAMES_DIR:-./inbox}:/games:ro
+    restart: unless-stopped

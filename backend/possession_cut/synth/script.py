@@ -236,19 +236,29 @@ class GameScript:
         include_and_one_ft: bool = True,
         pre_roll: float = 1.0,
         post_roll: float = 1.5,
-        ft_before: float = 3.0,
+        make_tail: float = 2.5,
+        score_hold: float = 0.5,
+        ft_lead: float = 2.0,
+        ft_tail: float = 2.0,
         ft_after: float = 1.0,
         min_len: float = 3.0,
         max_len: float = 30.0,
     ) -> list[dict]:
-        """Target clips for one team, following the PRD's NBA boundary rules."""
+        """Target clips for one team, following the PRD's NBA boundary rules.
+
+        The PRD states them against the moment the score appears, assuming the bug lags the
+        make by about a second. Here they are stated against the make itself, which is the
+        same thing at that lag and stays right when a broadcast's bug is slower: a clip
+        ends ``make_tail`` after the ball drops, but not before the new score has been on
+        screen for ``score_hold``, and never later than score + post-roll.
+        """
         clips: list[dict] = []
         by_event: dict[int, dict] = {}
         for ev in self.events:
             if ev.team != team:
                 continue
             if ev.kind == "fg":
-                end = ev.visible_time + post_roll
+                end = min(ev.visible_time + post_roll, max(ev.visible_time + score_hold, ev.make_time + make_tail))
                 start = (ev.possession_start or ev.make_time) - pre_roll
                 if end - start > max_len:
                     start = end - max_len
@@ -258,7 +268,10 @@ class GameScript:
                 clips.append(clip)
                 by_event[ev.index] = clip
             else:
-                seg = [ev.visible_time - ft_before, ev.visible_time + ft_after]
+                seg = [
+                    ev.make_time - ft_lead,
+                    min(ev.visible_time + ft_after, max(ev.visible_time + score_hold, ev.make_time + ft_tail)),
+                ]
                 if ev.and_one_of is not None:
                     if include_and_one_ft and ev.and_one_of in by_event:
                         parent = by_event[ev.and_one_of]
@@ -409,7 +422,16 @@ def _subtract_intervals(
 class ScriptBuilder:
     """Plays a game forward one possession at a time."""
 
-    def __init__(self, seed: int = 7, start_scores: tuple[int, int] = (0, 0), teams: dict | None = None):
+    def __init__(
+        self,
+        seed: int = 7,
+        start_scores: tuple[int, int] = (0, 0),
+        teams: dict | None = None,
+        extra_lag: tuple[float, float] = (0.0, 0.0),
+    ):
+        # extra_lag: seconds added to how long the bug takes to show a score. The default
+        # bug shows it 0.6-1.8 s after the make; (1.6, 2.2) gives the 2.2-4 s of ESPN's.
+        self.extra_lag = extra_lag
         self.seed = seed
         self.rng = random.Random(seed)
         self.teams = teams or DEFAULT_TEAMS
@@ -476,9 +498,9 @@ class ScriptBuilder:
         """Dead time with the clock stopped, optionally showing a replay."""
         if replay:
             kind, rlen = replay
-            lead = 2.5
-            if dur < lead + rlen + 1.0:
-                dur = lead + rlen + 1.0
+            lead = 2.5 + self.extra_lag[1]  # a replay does not start before the bug has caught up
+            if dur < lead + rlen + 1.0 + self.extra_lag[1]:
+                dur = lead + rlen + 1.0 + self.extra_lag[1]
             r0 = self.t + lead
             if kind == "bug":
                 # re-air the seconds leading up to the whistle/make, bug and all
@@ -492,20 +514,22 @@ class ScriptBuilder:
     def _record_score(self, team: str, points: int, kind: str, **extra) -> ScoreEvent:
         t_make = self.t
         self.score[team] += points
+        slow = self._u(*self.extra_lag) if self.extra_lag[1] > 0 else 0.0
         if kind == "fg":
             anim = extra.pop("anim", None)
             if anim is None:
                 anim = self.rng.random() < 0.6
             if anim:
-                t_bug = t_make + self._u(0.3, 0.7)
+                t_bug = t_make + slow + self._u(0.3, 0.7)
                 t_vis = t_bug + self._u(0.6, 1.0)
                 self.anims.append((t_bug, t_vis, team))
             else:
-                t_vis = t_make + self._u(0.6, 1.8)
+                t_vis = t_make + slow + self._u(0.6, 1.8)
             self.make_times.append(t_make)
         else:
+            # free throws show as late as baskets do: the same operator, the same graphic
             extra.pop("anim", None)
-            t_vis = t_make + self._u(0.5, 1.2)
+            t_vis = t_make + slow + self._u(0.6, 1.8)
         self.score_track.add(t_vis, (self.score[AWAY], self.score[HOME]))
         roster = self.teams[team]["roster"]
         scorer = self.rng.choice(roster)
@@ -620,6 +644,8 @@ class ScriptBuilder:
                     self._set_clock(False)
                 self.situation = "after_make"
                 self.inbound_at = self.t + kw.get("inbound", self._u(2.8, 4.5))
+                # the next score cannot show before this one has
+                self.inbound_at = max(self.inbound_at, ev.visible_time - 2.0)
                 self.ball = other(team)
         elif outcome in ("miss_def", "steal"):
             self.situation = "live"
@@ -722,7 +748,7 @@ class ScriptBuilder:
 # -- ready-made games ---------------------------------------------------------
 
 
-def coverage_game(seed: int = 7) -> GameScript:
+def coverage_game(seed: int = 7, extra_lag: tuple[float, float] = (0.0, 0.0)) -> GameScript:
     """A short, fixed game that exercises every situation the pipeline must handle.
 
     Home (NY) scores nine times: plain makes, a three, a two-shot foul, an and-one,
@@ -731,7 +757,7 @@ def coverage_game(seed: int = 7) -> GameScript:
     commercial, a replay with the bug hidden, two replays that re-air an earlier
     clock and score, a period break, and score animations that cover the score.
     """
-    b = ScriptBuilder(seed=seed, start_scores=(96, 88))
+    b = ScriptBuilder(seed=seed, start_scores=(96, 88), extra_lag=extra_lag)
     b.period_start(3, 150.0, lead=2.5, ball=HOME)
     b.possession(HOME, 9.0, "make2", anim=True)
     b.possession(AWAY, 8.0, "miss_def")
@@ -768,9 +794,10 @@ def random_game(
     period_seconds: float = 180.0,
     start_scores: tuple[int, int] = (0, 0),
     commercial_every: tuple[float, float] = (110.0, 190.0),
+    extra_lag: tuple[float, float] = (0.0, 0.0),
 ) -> GameScript:
     """A randomized game with realistic stoppages, replays and commercial breaks."""
-    b = ScriptBuilder(seed=seed, start_scores=start_scores)
+    b = ScriptBuilder(seed=seed, start_scores=start_scores, extra_lag=extra_lag)
     rng = b.rng
     for n, period in enumerate(periods):
         b.period_start(period, period_seconds, lead=rng.uniform(2.0, 3.5), ball=rng.choice([AWAY, HOME]))

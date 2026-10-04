@@ -223,7 +223,13 @@ def analyze(
 
     # -- 6. match, window, clips
     step(0.90, "matching", "Matching plays and finding clip boundaries")
-    matches: MatchResult | None = match_events(events, pbp, pbp_sides) if pbp else None
+    matches: MatchResult | None = None
+    if pbp:
+        matches = match_events(events, pbp, pbp_sides, clock_tolerance=adapter.pbp_clock_tolerance)
+        for ch in events:
+            m = matches.matches.get(ch.index)
+            if m is not None:
+                ch.extra["pbp"] = [e.to_dict() for e in m.events]
     window = resolve_window(tl, events, adapter, follow, spec.start_spec, spec.end_spec, pbp, matches)
     warnings.extend(window.notes or [])
     clips = build_clips(tl, events, adapter, follow, spec.options, t_min=window.t_min, t_max=window.t_max)

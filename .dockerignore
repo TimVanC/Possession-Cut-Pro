@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+.claude
+data
+inbox
+exports
+**/node_modules
+frontend/dist
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+backend/tests
+*.mp4
+*.mkv

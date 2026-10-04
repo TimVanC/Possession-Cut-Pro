@@ -13,9 +13,9 @@ from ..sports.base import ScoreChange, SportAdapter
 from . import intervals as iv
 from .timeline import Timeline
 
-FT_BEFORE, FT_AFTER = 3.0, 1.0
 MIN_SEGMENT = 0.4
 SAME_STOPPAGE_SECONDS = 75.0
+STOPPED_BEFORE_FT = 3.0  # the clock has been stopped at least this long before a free throw scores
 AND_ONE_SECONDS = 120.0
 
 DEFAULT_OPTIONS = {
@@ -64,10 +64,14 @@ class ClipDraft:
 
 
 def _same_stoppage(a: ScoreChange, b: ScoreChange, tol: float = 0.05) -> bool:
-    """Two scores during one dead ball: same period, clock has not moved."""
-    if a.period != b.period or a.clock is None or b.clock is None:
+    """Two scores during one dead ball: same period, and both came out of a stoppage at
+    the same clock value. (A slow bug can show the last free throw after play has resumed,
+    so the clock at the score itself is no guide.)"""
+    clock_a = a.clock_held if a.clock_held is not None else a.clock
+    clock_b = b.clock_held if b.clock_held is not None else b.clock
+    if a.period != b.period or clock_a is None or clock_b is None:
         return False
-    return abs(a.clock - b.clock) <= tol and 0 <= b.t - a.t <= SAME_STOPPAGE_SECONDS
+    return abs(clock_a - clock_b) <= tol and 0 <= b.t - a.t <= SAME_STOPPAGE_SECONDS
 
 
 def _gap_before(tl: Timeline, change: ScoreChange) -> tuple[float, float] | None:
@@ -101,14 +105,28 @@ def build_clips(
     def selected(e: ScoreChange) -> bool:
         return e.team in sides and (t_min is None or e.t >= t_min) and (t_max is None or e.t <= t_max)
 
+    def window(e: ScoreChange) -> list[float]:
+        before, after = adapter.score_window(tl, e)
+        return [e.t - before, e.t + after]
+
     for pos, e in enumerate(events):
         if not selected(e):
             continue
         kind = kinds[e.index]
         warnings = list(e.notes)
 
+        # a follow-up the sport hangs on the previous score's clip (football's extra point)
+        prev_any = events[pos - 1] if pos > 0 else None
+        if prev_any is not None and prev_any.team == e.team and adapter.tail_of(prev_any, e):
+            parent_clip = clip_of.get(prev_any.index)
+            if parent_clip is not None and opts.get("include_tail", True):
+                parent_clip.segments.append(window(e))
+                parent_clip.changes.append(e)
+                clip_of[e.index] = parent_clip
+            continue
+
         if kind == "free_throws":
-            seg = [e.t - FT_BEFORE, e.t + FT_AFTER]
+            seg = window(e)
             prev = events[pos - 1] if pos > 0 else None
             parent = None
             if prev is not None and prev.team == e.team and e.t - prev.t <= AND_ONE_SECONDS:
@@ -116,7 +134,7 @@ def build_clips(
                     # And-one: a basket, then a free throw with the clock where the whistle
                     # left it. The basket's score can show a beat before the clock stops,
                     # so allow a second of slack there.
-                    if e.clock_stopped and _same_stoppage(prev, e, tol=1.05):
+                    if (e.clock_stopped or e.stopped_before >= STOPPED_BEFORE_FT) and _same_stoppage(prev, e, tol=1.05):
                         parent = clip_of.get(prev.index) if prev.index in clip_of else False
                 elif _same_stoppage(prev, e) and prev.index in clip_of and clip_of[prev.index].kind != "free_throws":
                     parent = clip_of[prev.index]  # second free throw riding on a basket clip
@@ -153,7 +171,7 @@ def build_clips(
         gap = _gap_before(tl, e)
         if gap is not None:
             # The make happened before the broadcast cut away; the clip ends at the cutaway.
-            anchor = replace(e, t=gap[0])
+            anchor = replace(e, t=gap[0], extra={**e.extra, "anchored": True})
             end = gap[0]
             warnings.append("score appeared after a break; clip ends where the broadcast cut away")
         else:

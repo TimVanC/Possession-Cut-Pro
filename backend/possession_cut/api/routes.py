@@ -190,7 +190,7 @@ def sports() -> list[dict]:
                 "period_seconds": adapter.period_seconds,
                 "has_clock": adapter.has_clock,
                 "fields": [{"name": f.name, "required": f.required, "description": f.description} for f in adapter.bug_fields],
-                "options": getattr(adapter, "options", []),
+                "options": list(adapter.options),
             }
         )
     return out

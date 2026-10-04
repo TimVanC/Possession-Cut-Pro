@@ -64,6 +64,10 @@ export default function ExportDialog({
   const [caption, setCaption] = useState(defaultCaption);
   const [crossfade, setCrossfade] = useState(true);
   const [showing, setShowing] = useState<number | null>(null);
+  // sport-specific export toggles (baseball's home run trot)
+  const sports = useQuery({ queryKey: ["sports"], queryFn: api.sports, staleTime: 60_000 });
+  const sportOptions = (sports.data?.find((s) => s.key === job.sport)?.options ?? []).filter((o) => o.where === "export");
+  const [extra, setExtra] = useState<Record<string, boolean>>({});
 
   const live = useJobEvents(job.id, true);
   const status = live?.status ?? job.status;
@@ -75,7 +79,13 @@ export default function ExportDialog({
   });
 
   const start = useMutation({
-    mutationFn: () => api.startExport(job.id, { title, caption, audio_crossfade: crossfade }),
+    mutationFn: () =>
+      api.startExport(job.id, {
+        title,
+        caption,
+        audio_crossfade: crossfade,
+        options: Object.fromEntries(sportOptions.map((o) => [o.key, extra[o.key] ?? o.default])),
+      }),
     onSuccess: (record) => {
       setShowing(record.id);
       client.invalidateQueries({ queryKey: ["job", job.id] });
@@ -125,6 +135,15 @@ export default function ExportDialog({
             <input id="caption" className="field" value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="2026 NBA Finals, Game 4" />
           </div>
           <Toggle checked={crossfade} onChange={setCrossfade} label="Audio crossfade at cuts" hint="A short blend of the broadcast audio at each cut so there are no pops. Video cuts stay hard." />
+          {sportOptions.map((o) => (
+            <Toggle
+              key={o.key}
+              checked={extra[o.key] ?? o.default}
+              onChange={(v) => setExtra((prev) => ({ ...prev, [o.key]: v }))}
+              label={o.label}
+              hint={o.hint}
+            />
+          ))}
           <p className="text-xs text-ink-400">Nothing is drawn over the video itself. Leave the title empty for plain black bars.</p>
           {start.error && <Note tone="error">{(start.error as Error).message}</Note>}
           <div className="flex justify-end gap-2">

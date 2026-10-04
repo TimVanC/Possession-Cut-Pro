@@ -26,9 +26,12 @@ __all__ = [
 
 
 def _registry() -> dict[str, type[SportAdapter]]:
+    from .mlb import MLBAdapter
     from .nba import NBAAdapter
+    from .nfl import NFLAdapter
+    from .nhl import NHLAdapter
 
-    return {"nba": NBAAdapter}
+    return {"nba": NBAAdapter, "nfl": NFLAdapter, "nhl": NHLAdapter, "mlb": MLBAdapter}
 
 
 def available_sports() -> list[dict[str, str]]:

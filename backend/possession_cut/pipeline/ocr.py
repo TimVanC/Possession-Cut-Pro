@@ -141,14 +141,17 @@ class OcrEngine:
                 if self._strip is None:
                     self._strip = RapidOCR(
                         intra_op_num_threads=max(1, self._threads),
-                        det_limit_type="max", det_limit_side_len=1920, width_height_ratio=-1,
+                        det_limit_type="max", det_limit_side_len=2400, width_height_ratio=-1,
                     )
                 ocr = self._strip
             else:
                 if self._full is None:
                     self._full = RapidOCR(intra_op_num_threads=max(1, self._threads))
                 ocr = self._full
-            result, _ = ocr(image, use_cls=False, text_score=min_conf)
+            if strip:
+                result, _ = ocr(image, use_cls=False, text_score=min_conf, unclip_ratio=1.3, box_thresh=0.5)
+            else:
+                result, _ = ocr(image, use_cls=False, text_score=min_conf)
         boxes = []
         for quad, text, conf in result or []:
             xs = [p[0] for p in quad]

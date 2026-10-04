@@ -39,6 +39,8 @@ STOPPED_SECONDS = 1.4  # a clock value held this long means the clock is stopped
 # A stoppage that restarts a possession (whistle, ball handed in) lasts seconds. Requiring
 # this much keeps one repeated clock misread from looking like a stop-and-start.
 RESTART_MIN_STOP = 2.4
+# an operator correcting a shot clock reset (24, then 14) does it within this long
+CORRECTION_SECONDS = 1.5
 FILL_GAP_SECONDS = 6.0
 
 
@@ -121,6 +123,9 @@ class Timeline:
     home_read: np.ndarray
     notes: dict = field(default_factory=dict)
     shot_reset_values: tuple[float, ...] = ()
+    # Text read for bug fields that have no column of their own (down and distance, count,
+    # outs, runners...), one entry per sample, "" where not live or unreadable.
+    extra: dict[str, list[str]] = field(default_factory=dict)
 
     def __len__(self) -> int:
         return len(self.t)
@@ -205,18 +210,17 @@ class Timeline:
         for i in range(n):
             if not live[i] or np.isnan(sc[i]):
                 continue
-            jumped = False
-            if last_known >= 0:
+            found = None
+            if last_known >= 0 and sc[i] >= sc[last_known] + 1.0:
+                found = self._reset_at(i, float(sc[last_known]))
+            if found is not None:
+                value, settled = found
                 gap = self.t[i] - self.t[last_known]
-                if sc[i] >= sc[last_known] + 1.0 and self._plausible_reset(i):
-                    jumped = True
-                    t_reset = self.t[i] - self.dt / 2 if gap <= self.dt * 1.5 else self.t[i]
-            if jumped:
-                value = float(sc[i])
+                t_reset = self.t[i] - self.dt / 2 if gap <= self.dt * 1.5 else self.t[i]
                 # find the first decrement: the shot clock shows its reset value for one
                 # full second after it starts, so it started 1 s before the change
                 t_start = t_reset
-                k = i + 1
+                k = settled
                 while k < n and self.t[k] - self.t[i] < 40.0:
                     if live[k] and not np.isnan(sc[k]):
                         if sc[k] < value:
@@ -243,18 +247,73 @@ class Timeline:
         out.sort(key=lambda r: r.t)
         return out
 
-    def _plausible_reset(self, i: int) -> bool:
-        """A jump up in the shot clock counts as a reset only if it lands on a reset value
-        and the next read continues from it. A misread digit does neither."""
+    def text_changes(self, name: str, hold: int = 2) -> list[tuple[float, str, str]]:
+        """Changes in an extra text field: (video time, old text, new text).
+
+        A new value counts once it has been read on ``hold`` samples in a row, the same
+        rule scores follow, so one misread does not register as a change.
+        """
+        track = self.extra.get(name)
+        if not track:
+            return []
+        out: list[tuple[float, str, str]] = []
+        current = ""
+        i, n = 0, len(track)
+        while i < n:
+            text = track[i]
+            if not text or text == current:
+                i += 1
+                continue
+            j = i
+            while j + 1 < n and track[j + 1] == text:
+                j += 1
+            if j - i + 1 >= hold:
+                if current:
+                    out.append((float(self.t[i]), current, text))
+                current = text
+            i = j + 1
+        return out
+
+    def _reset_at(self, i: int, previous: float) -> tuple[float, int] | None:
+        """If the jump up at sample i is a shot clock reset: the value it was reset to and
+        the sample from which that value counts down. None for a misread.
+
+        A reset lands on a reset value and the next read continues from it; a misread digit
+        does neither. Two things real broadcasts do are allowed for: the graphic can skip
+        the reset value and first show the second after it (12, then 23), and the operator
+        can correct a reset within a moment (24, then 14 for an offensive rebound).
+        """
         sc = self.shot_clock
-        value = sc[i]
-        if self.shot_reset_values and not any(abs(value - r) < 0.01 for r in self.shot_reset_values):
-            return False
-        for k in range(i + 1, min(len(sc), i + int(3 * self.fps) + 1)):
-            if self.live[k] and not np.isnan(sc[k]):
-                dt = self.t[k] - self.t[i]
-                return value - dt - 1.0 <= sc[k] <= value
-        return True  # nothing to contradict it
+        landed = float(sc[i])
+        ahead = [
+            k for k in range(i + 1, min(len(sc), i + int(3 * self.fps) + 1))
+            if self.live[k] and not np.isnan(sc[k])
+        ]
+
+        def continues(k: int) -> bool:
+            return landed - (self.t[k] - self.t[i]) - 1.0 <= sc[k] <= landed
+
+        targets = self.shot_reset_values
+        if not targets:
+            return (landed, i) if not ahead or continues(ahead[0]) else None
+        if any(abs(landed - r) < 0.01 for r in targets):
+            if not ahead or continues(ahead[0]):
+                return landed, i
+            k = ahead[0]
+            corrected = float(sc[k])
+            if (
+                previous < corrected < landed
+                and any(abs(corrected - r) < 0.01 for r in targets)
+                and self.t[k] - self.t[i] <= CORRECTION_SECONDS
+            ):
+                return corrected, k
+            return None
+        if landed >= previous + 2.0 and len(ahead) >= 2:
+            a, b = ahead[0], ahead[1]
+            for r in targets:
+                if abs(landed - (r - 1.0)) < 0.01 and continues(a) and continues(b) and sc[b] <= sc[a]:
+                    return float(r), i
+        return None
 
     def score_change_times(self, side: str) -> list[float]:
         """Video times at which this side's cleaned score went up."""
@@ -312,6 +371,42 @@ class Timeline:
                     out.append(ClockStart(float(est), float(held), nxt))
             a = b + 1
         return out
+
+    def stopped_duration(self, i: int, reach: float = 180.0) -> float:
+        """Seconds the game clock had already shown its current value at sample i. A replay
+        or a break in between does not interrupt it: a stopped clock stays stopped while
+        the bug is away. A running whole-second clock gives up to a second."""
+        now = self.value_near(self.clock, i, 2)
+        if np.isnan(now):
+            return 0.0
+        first = i
+        j = i - 1
+        while j >= 0 and self.t[i] - self.t[j] <= reach:
+            if self.live[j] and not np.isnan(self.clock[j]):
+                if abs(float(self.clock[j]) - now) >= 0.05:
+                    break
+                first = j
+            j -= 1
+        return float(self.t[i] - self.t[first])
+
+    def last_clock_stop(self, t: float, within: float) -> float | None:
+        """Video time the game clock last went from running to stopped in the ``within``
+        seconds before t. None if it kept running, or was already stopped before that."""
+        end = self.index_at(t)
+        begin = max(0, self.index_at(t - within - 3.0))
+        known = [k for k in range(begin, end + 1) if self.live[k] and not np.isnan(self.clock[k])]
+        found = None
+        a = 0
+        while a < len(known):
+            b = a
+            while b + 1 < len(known) and abs(self.clock[known[b + 1]] - self.clock[known[a]]) < 0.05:
+                b += 1
+            # a running clock repeats a value too: twice when it shows whole seconds
+            need = 0.5 if self.clock[known[a]] < 60.0 else 1.5
+            if a > 0 and self.t[known[b]] - self.t[known[a]] >= need and self.t[known[a]] >= t - within:
+                found = float(self.t[known[a]] - self.dt / 2)
+            a = b + 1
+        return found
 
     def stopped_since(self, i: int, seconds: float) -> bool:
         """Has the game clock shown the same value for at least ``seconds`` up to sample i?"""
@@ -386,7 +481,7 @@ class Timeline:
 # -- building ------------------------------------------------------------------------
 
 
-def _parse_column(raw: RawSamples, name: str, min_conf: float) -> np.ndarray:
+def _parse_column(raw: RawSamples, name: str, min_conf: float, parse=parse_field) -> np.ndarray:
     out = np.full(len(raw), np.nan)
     texts = raw.texts.get(name)
     if texts is None:
@@ -395,10 +490,16 @@ def _parse_column(raw: RawSamples, name: str, min_conf: float) -> np.ndarray:
     for i, text in enumerate(texts):
         if not raw.visible[i] or not text or confs[i] < min_conf:
             continue
-        value = parse_field(name, text)
+        value = parse(name, text)
         if value is not None:
-            out[i] = float(value)
+            try:
+                out[i] = float(value)
+            except (TypeError, ValueError):
+                continue
     return out
+
+
+CORE_FIELDS = {"period", "clock", "shot_clock", "away_score", "home_score", "away_label", "home_label"}
 
 
 def _ffill(values: np.ndarray) -> np.ndarray:
@@ -603,11 +704,12 @@ def build_timeline(raw: RawSamples, adapter: SportAdapter) -> Timeline:
     visible = raw.visible.copy()
     dt = 1.0 / raw.fps
 
-    period_raw = _parse_column(raw, "period", CLOCK_MIN_CONF)
-    clock_raw = _parse_column(raw, "clock", CLOCK_MIN_CONF)
-    shot_raw = _parse_column(raw, "shot_clock", CLOCK_MIN_CONF)
-    away_raw = _parse_column(raw, "away_score", SCORE_MIN_CONF)
-    home_raw = _parse_column(raw, "home_score", SCORE_MIN_CONF)
+    parse = adapter.parse_field
+    period_raw = _parse_column(raw, "period", CLOCK_MIN_CONF, parse)
+    clock_raw = _parse_column(raw, "clock", CLOCK_MIN_CONF, parse) if adapter.has_clock else np.full(n, np.nan)
+    shot_raw = _parse_column(raw, "shot_clock", CLOCK_MIN_CONF, parse)
+    away_raw = _parse_column(raw, "away_score", SCORE_MIN_CONF, parse)
+    home_raw = _parse_column(raw, "home_score", SCORE_MIN_CONF, parse)
     notes: dict = {}
 
     # a clock above the period length is a misread
@@ -616,7 +718,7 @@ def build_timeline(raw: RawSamples, adapter: SportAdapter) -> Timeline:
     # -- period
     if np.isnan(period_raw).all():
         period = _infer_period(clock_raw, adapter.period_seconds)
-        notes["period_inferred"] = True
+        notes["period_inferred"] = bool(adapter.has_clock)
     else:
         period = _clean_period(period_raw)
 
@@ -708,4 +810,10 @@ def build_timeline(raw: RawSamples, adapter: SportAdapter) -> Timeline:
         score_away=score_away, score_home=score_home, clock_running=running, confidence=conf,
         clock_read=clock_read, away_read=away_read, home_read=home_read, notes=notes,
         shot_reset_values=resets,
+        extra={
+            name: [
+                texts[i].strip() if live[i] and raw.confs[name][i] >= CLOCK_MIN_CONF else "" for i in range(n)
+            ]
+            for name, texts in raw.texts.items() if name not in CORE_FIELDS
+        },
     )

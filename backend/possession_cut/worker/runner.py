@@ -257,6 +257,12 @@ def run_export(job_id: int) -> None:
             for c in enabled
         ]
     cal, _, _ = load_calibration(job_id)
+    for row in clip_rows:
+        extra = adapter.export_extend(row["kind"], opts)
+        if extra > 0:
+            row["segments"] = [list(seg) for seg in row["segments"]]
+            row["segments"][-1][1] = min(probe.duration, row["segments"][-1][1] + extra)
+            row["src_out"] = row["segments"][-1][1]
     segments = [tuple(seg) for row in clip_rows for seg in row["segments"]]
     plan = plan_export(
         probe, segments, cal.crop,

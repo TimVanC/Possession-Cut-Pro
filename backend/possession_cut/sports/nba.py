@@ -12,13 +12,15 @@ and labels ("NBA Finals", "NYK leads 3-1") for any season.
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from typing import TYPE_CHECKING
 
 from . import http
 from .base import FieldSpec, Game, PlayByPlayUnavailable, ScoreChange, ScoringEvent, SportAdapter
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ..pipeline.timeline import Timeline
+    from ..pipeline.timeline import ShotReset, Timeline
 
 log = logging.getLogger(__name__)
 
@@ -113,9 +115,24 @@ class NBAAdapter(SportAdapter):
     period_label = "Q"
     shot_clock_max = 24.0
     shot_clock_resets = (24.0, 14.0)
-    # The bug shows a make 0.5-2 s after it happens, and the shot clock resets on the make.
-    # Signals this close to the score appearing belong to the make, not to the possession.
-    make_lag_guard = 2.5
+    # The shot clock resets as the ball drops; the score follows later. How much later
+    # depends on the broadcast: 0.5-2 s on some, 2.2-3.8 s on ESPN/ABC's bug. A reset this
+    # close before the score is the make itself, and nothing from it on can be the start
+    # of the possession.
+    make_lag_max = 4.5
+    held_lag_max = 8.0  # ...or further back if the shot clock never ran in between (and-one)
+    make_lag_guard = 2.5  # assumed when the make's own reset cannot be seen
+    # "Ends right after the make": this long after the ball drops, but not before the new
+    # score has been on screen for a moment, and never later than score + post-roll.
+    make_tail = 2.5
+    score_hold = 0.5
+    # A free throw clip runs from this long before the ball drops to this long after it.
+    ft_lead, ft_tail = 2.0, 2.0
+    assumed_lag = 1.0  # bug lag to assume when the game's baskets do not reveal it
+    # A jump of 2+ with the clock stopped is free throws only if it had been stopped a
+    # while before the score showed (27 s at the least in a real game). After a basket
+    # through a foul it has been stopped for just the bug's lag.
+    ft_stopped_min = 8.0
 
     # -- league data -----------------------------------------------------
     def teams(self) -> list[dict[str, str]]:
@@ -203,20 +220,86 @@ class NBAAdapter(SportAdapter):
 
     # -- clip rules ----------------------------------------------------------
     def classify(self, change: ScoreChange) -> str:
-        # +1 is always a free throw. A bigger jump with the clock stopped throughout is a
-        # trip to the line whose first make was not seen (the bug was hidden between shots).
-        if change.points == 1 or change.clock_stopped:
+        # The play-by-play, when matched, knows what kind of score this was.
+        kinds = {p.get("kind") for p in change.extra.get("pbp") or []} - {None}
+        if kinds:
+            return "free_throws" if kinds == {"free_throw"} else "field_goal"
+        # +1 is always a free throw. A bigger jump with the clock stopped for a long time
+        # is a trip to the line whose first make was not seen (bug hidden between shots).
+        if change.points == 1 or (change.clock_stopped and change.stopped_before >= self.ft_stopped_min):
             return "free_throws"
         return "field_goal"
 
+    def make_time(self, timeline: Timeline, change: ScoreChange) -> tuple[float | None, ShotReset | None]:
+        """When the ball actually dropped, and the shot clock reset that shows it.
+
+        The reset is the last one before the score appeared, close enough to be the make.
+        With the shot clock off (end of a period) the game clock stopping does the same job:
+        it stops on a make in the last minutes.
+        """
+        anchored = bool(change.extra.get("anchored"))  # the score first showed after a break
+        for reset in reversed(timeline.shot_resets):
+            if reset.t > change.t or math.isnan(reset.value):
+                continue
+            age = change.t - reset.t
+            if anchored:
+                # the make came before the cutaway only if the shot clock never ran again
+                found = age <= self.make_lag_max and reset.t_start >= change.t - 0.5
+            else:
+                held = reset.t_start >= change.t - 1.0
+                found = age <= self.make_lag_max or (held and age <= self.held_lag_max)
+            if found:
+                return reset.t, reset
+            break
+        if not anchored:
+            return timeline.last_clock_stop(change.t, self.make_lag_max), None
+        return None, None
+
+    def bug_lag(self, timeline: Timeline) -> float | None:
+        """How long after a make this broadcast's bug shows the score: the median over the
+        game's baskets, both teams. None when too few makes show their reset."""
+        cache = timeline.__dict__
+        if "_nba_bug_lag" not in cache:
+            resets = [r for r in timeline.shot_resets if not math.isnan(r.value)]
+            lags: list[float] = []
+            k = 0
+            for t in sorted(timeline.score_change_times("away") + timeline.score_change_times("home")):
+                while k < len(resets) and resets[k].t <= t:
+                    k += 1
+                if k and t - resets[k - 1].t <= self.make_lag_max:
+                    lags.append(t - resets[k - 1].t)
+            cache["_nba_bug_lag"] = statistics.median(lags) if len(lags) >= 4 else None
+        return cache["_nba_bug_lag"]
+
+    def clip_end(self, timeline: Timeline, change: ScoreChange, options: dict) -> float:
+        latest = change.t + self.default_rolls[1]
+        made, _ = self.make_time(timeline, change)
+        if made is None:
+            return latest
+        return min(latest, max(change.t + self.score_hold, made + self.make_tail))
+
+    def score_window(self, timeline: Timeline, change: ScoreChange) -> tuple[float, float]:
+        # Free throws leave no trace on the shot clock, so the ball is taken to have
+        # dropped one bug lag before the score showed.
+        lag = self.bug_lag(timeline)
+        if lag is None:
+            lag = self.assumed_lag
+        return lag + self.ft_lead, min(1.0, max(self.score_hold, self.ft_tail - lag))
+
     def possession_start(self, timeline: Timeline, change: ScoreChange) -> tuple[float, str]:
         """Latest of: shot clock reset to 24/14, game clock starting after a stoppage,
-        the opponent scoring, or this team's previous score. Falls back to the maximum
-        clip length."""
-        limit = change.t - self.make_lag_guard
+        the opponent scoring, this team's previous score, or the bug coming back from a
+        break. Only what happened before the make counts. Falls back to the maximum clip
+        length."""
+        made, make_reset = self.make_time(timeline, change)
+        # the shot clock going blank and the game clock stopping are the make too, and
+        # are timed to the nearest sample: keep clear of the make by more than that
+        limit = change.t - self.make_lag_guard if made is None else made - 0.75
         candidates: list[tuple[float, str]] = []
         for reset in reversed(timeline.shot_resets):
-            if reset.t <= limit and reset.t_start <= change.t - 1.0:
+            if make_reset is not None and reset.index >= make_reset.index:
+                continue
+            if reset.t <= limit and reset.t_start <= (change.t - 1.0 if made is None else limit):
                 candidates.append((reset.t_start, "shot_clock"))
                 break
         for start in reversed(timeline.clock_starts):
@@ -235,6 +318,13 @@ class NBAAdapter(SportAdapter):
                 # A possession cannot begin before the team's own previous basket. When this
                 # is the best signal the two clips overlap and merge into one.
                 candidates.append((t_own + self.default_rolls[0], "own_score"))
+                break
+        for _gone, back in reversed(timeline.not_live_intervals):
+            if back <= limit:
+                # Play was already under way when the bug came back from a cutaway: the
+                # possession began out of sight, and the clip starts where the bug returns.
+                if back - _gone >= 4.0:
+                    candidates.append((back + self.default_rolls[0], "bug_returned"))
                 break
         if not candidates:
             return change.t - self.max_clip_seconds, "max_length"

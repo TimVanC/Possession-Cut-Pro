@@ -83,8 +83,18 @@ class ScoreChange:
     score_away: int
     score_home: int
     clock_stopped: bool = False
+    # seconds the game clock had already shown its current value when the score appeared
+    stopped_for: float = 0.0
+    # The stoppage the score came out of: the longest the clock had been stopped in the
+    # few seconds before the score showed, and the value it was stopped at. A slow bug
+    # shows a free throw after play has resumed, so the clock at the score is no guide.
+    stopped_before: float = 0.0
+    clock_held: float | None = None
     confidence: float = 1.0
     notes: list[str] = field(default_factory=list)
+    # Matched play-by-play events as dicts under "pbp" (set before clip building), plus
+    # anything else an adapter wants to carry between its own hooks.
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class PlayByPlayUnavailable(RuntimeError):
@@ -110,6 +120,12 @@ class SportAdapter(ABC):
     # Shot/play clock: its largest value and the values it is reset to. Empty = any.
     shot_clock_max: float = 24.0
     shot_clock_resets: tuple[float, ...] = ()
+    # How far the bug clock (when the score shows) may sit from the play-by-play clock and
+    # still count as full agreement. Sports whose play-by-play stamps the start of the play
+    # rather than the score need more.
+    pbp_clock_tolerance: float = 3.0
+    # Sport-specific toggles: {"key", "label", "hint", "default", "where": "setup" | "export"}
+    options: tuple[dict[str, Any], ...] = ()
 
     # -- league data -----------------------------------------------------
     @abstractmethod
@@ -143,6 +159,18 @@ class SportAdapter(ABC):
         n = period - self.regulation_periods
         return "OT" if n == 1 else f"{n}OT"
 
+    # -- reading the bug -------------------------------------------------------
+    def parse_field(self, name: str, text: str):
+        """Typed value of one bug field read (None when the text is not valid for it).
+
+        "period" must come back as a number that never decreases over a game (baseball
+        encodes inning and half into one). Fields the timeline has no column for are kept
+        as text in ``Timeline.extra``.
+        """
+        from ..pipeline.calibration import parse_field
+
+        return parse_field(name, text)
+
     # -- clip rules ----------------------------------------------------------
     def classify(self, change: ScoreChange) -> str:
         """Clip kind for a score change (field_goal, free_throws, touchdown, goal, run...)."""
@@ -154,6 +182,21 @@ class SportAdapter(ABC):
 
     def clip_end(self, timeline: Timeline, change: ScoreChange, options: dict) -> float:
         return change.t + self.default_rolls[1]
+
+    def score_window(self, timeline: Timeline, change: ScoreChange) -> tuple[float, float]:
+        """Seconds to show before and after the score appears, for scores clipped as a
+        short window rather than a whole possession (free throws, extra points)."""
+        return 3.0, 1.0
+
+    def tail_of(self, previous: ScoreChange, change: ScoreChange) -> bool:
+        """Is ``change`` a short follow-up to ``previous`` (same team, the score right
+        before it) that should ride on its clip rather than stand alone? Basketball's
+        and-one is handled by the core; football's extra point is the other case."""
+        return False
+
+    def export_extend(self, clip_kind: str, options: dict) -> float:
+        """Extra seconds to add to the end of a clip of this kind at export time."""
+        return 0.0
 
     def describe_points(self, points: int, kind: str) -> str:
         return f"+{points}"

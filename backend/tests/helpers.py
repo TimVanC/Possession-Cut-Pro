@@ -139,8 +139,10 @@ def grade(clips: list[ClipDraft], truth_clips: list[dict], not_live: list, start
             elif start_err > start_tol:
                 g.problems.append(f"{label}: starts {start_err:+.2f}s into a possession")
         else:
+            # a free throw leaves no trace of when the ball dropped; its window is placed by
+            # the broadcast's typical bug lag, so it gets the tolerance of a possession start
             start_err = c.src_in - first["src_in"]
-            if abs(start_err) > end_tol:
+            if abs(start_err) > start_tol:
                 g.problems.append(f"free throws to {last['score_after']}: start {start_err:+.2f}s from target")
         if len(mine) == 1 and first.get("start_observable", True):
             if c.kind != first["kind"]:

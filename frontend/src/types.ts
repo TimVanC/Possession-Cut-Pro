@@ -207,7 +207,7 @@ export interface Sport {
   period_seconds: number;
   has_clock: boolean;
   fields: { name: string; required: boolean; description: string }[];
-  options: { key: string; label: string; default: boolean; where: string }[];
+  options: { key: string; label: string; hint?: string; default: boolean; where: string }[];
 }
 
 export interface Health {
