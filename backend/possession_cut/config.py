@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     ffprobe_path: str = ""
     analysis_workers: int = Field(default=0, ge=0)
     hwaccel: str = "none"
+    # Extra browser origins allowed to call this API (comma separated), e.g. a hosted copy
+    # of the frontend: https://your-app.vercel.app
+    cors_origins: str = ""
 
     # -- resolved paths -------------------------------------------------
     def _resolve(self, value: str) -> Path:
@@ -84,6 +87,15 @@ class Settings(BaseSettings):
             if not any(_is_within(extra, r) for r in roots):
                 roots.append(extra)
         return roots
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        extra = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        return ["http://localhost:5173", "http://127.0.0.1:5173", *extra]
+
+    @property
+    def heartbeat_path(self) -> Path:
+        return self.data_path / "worker.heartbeat"
 
     @property
     def workers(self) -> int:

@@ -80,6 +80,8 @@ class Clip(SQLModel, table=True):
     # Kept ranges inside [src_in, src_out]. More than one when a replay or the walk-up
     # between free throws was cut out of the middle.
     segments: list[list[float]] = Field(default_factory=list, sa_column=Column(JSON))
+    # what analysis produced, so "reset" can undo manual nudges
+    auto_segments: list[list[float]] = Field(default_factory=list, sa_column=Column(JSON))
     auto_in: float = 0.0
     auto_out: float = 0.0
     team: str = ""
