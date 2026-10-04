@@ -38,3 +38,6 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+
+# test caches
+backend/tests/.cache/
