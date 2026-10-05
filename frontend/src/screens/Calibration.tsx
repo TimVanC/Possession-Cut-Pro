@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, url } from "../api";
-import { Note, ProgressBar, Spinner } from "../components";
+import { Note, Spinner, TaskProgress } from "../components";
 import { clamp, formatDuration, useDebounced, useJobEvents } from "../lib";
 import type { Box, Calibration, FieldRead } from "../types";
 
@@ -352,11 +352,10 @@ export default function CalibrationScreen() {
       <main className="mx-auto max-w-xl py-16 text-center">
         <h1 className="text-xl font-semibold">Finding the score bug</h1>
         <p className="mt-1 text-ink-400">{j.source_name}</p>
-        <ProgressBar value={p.progress} className="mt-8" />
-        <p className="num mt-2 text-ink-300">{p.message || "Working"}</p>
-        <p className="mt-6 text-xs text-ink-400">
-          Twelve frames are sampled across the file. A saved template is tried first, then the bug is located and each field is read to check it.
-        </p>
+        <div className="mx-auto mt-8 max-w-md">
+          <TaskProgress task={p} />
+        </div>
+        <p className="mt-6 text-xs text-ink-400">Usually under two minutes.</p>
       </main>
     );
   }

@@ -11,6 +11,14 @@ export function formatDuration(seconds: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
 }
 
+/** "about 4 min left". Null while there is too little to estimate from. */
+export function formatEta(seconds: number | null | undefined): string | null {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return null;
+  if (seconds < 50) return "under a minute left";
+  if (seconds < 90) return "about 1 min left";
+  return `about ${Math.round(seconds / 60)} min left`;
+}
+
 export function formatSeconds(seconds: number): string {
   return `${seconds.toFixed(1)}s`;
 }

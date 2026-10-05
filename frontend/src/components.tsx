@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useState } from "react";
 import { api } from "./api";
-import { STATUS_TEXT, formatBytes } from "./lib";
-import type { JobStatus } from "./types";
+import { STATUS_TEXT, formatBytes, formatEta } from "./lib";
+import type { JobStatus, TaskProgress as TaskProgressData } from "./types";
 
 const STATUS_STYLE: Record<JobStatus, string> = {
   draft: "bg-ink-700 text-ink-300",
@@ -34,6 +34,61 @@ export function ProgressBar({ value, className = "" }: { value: number; classNam
       aria-valuemax={100}
     >
       <div className="h-full rounded-full bg-court transition-[width] duration-300" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+/**
+ * A running task: the bar, what it is doing, roughly how long is left, and the steps of
+ * the task with the current one marked.
+ */
+export function TaskProgress({
+  task,
+  compact = false,
+  fallback = "Working",
+}: {
+  task: Pick<TaskProgressData, "progress" | "message" | "stage" | "steps" | "eta_seconds">;
+  compact?: boolean;
+  fallback?: string;
+}) {
+  const eta = formatEta(task.eta_seconds);
+  const steps = task.steps ?? [];
+  const waiting = steps.length > 0 && steps.every((s) => s.state === "todo");
+  return (
+    <div data-testid="task-progress">
+      <ProgressBar value={task.progress} />
+      <div className="num mt-1.5 flex items-baseline justify-between gap-4 text-xs text-ink-400">
+        <span className="min-w-0 truncate text-left">
+          {Math.round(task.progress * 100)}% · {task.message || task.stage || fallback}
+        </span>
+        <span className="shrink-0 text-ink-300" data-testid="task-eta">
+          {eta ?? (waiting ? "waiting to start" : "estimating time")}
+        </span>
+      </div>
+      {!compact && steps.length > 0 && (
+        <ol className="mt-5 space-y-2 text-left text-[13px]" aria-label="Steps">
+          {steps.map((step, i) => (
+            <li key={step.label} className="flex items-center gap-3" data-state={step.state}>
+              <span
+                aria-hidden
+                className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${
+                  step.state === "done"
+                    ? "bg-court text-ink-950"
+                    : step.state === "active"
+                      ? "border-2 border-court text-court"
+                      : "border border-ink-600 text-ink-400"
+                }`}
+              >
+                {step.state === "done" ? "✓" : i + 1}
+              </span>
+              <span className={step.state === "active" ? "font-medium text-ink-100" : step.state === "done" ? "text-ink-300" : "text-ink-400"}>
+                {step.label}
+              </span>
+              {step.state === "active" && <Spinner className="h-3 w-3" />}
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

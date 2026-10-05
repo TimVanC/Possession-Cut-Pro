@@ -39,6 +39,7 @@ from ..pipeline.window import biggest_run_start
 from ..sports import PlayByPlayUnavailable, available_sports, get_adapter
 from ..worker.inbox import VIDEO_EXTENSIONS, is_video
 from ..worker.runner import job_dir, load_calibration, save_calibration
+from .progress import progress_view
 from .uploads import is_upload
 
 router = APIRouter(prefix="/api")
@@ -72,6 +73,7 @@ def job_out(job: Job) -> dict[str, Any]:
         "progress": round(job.progress or 0.0, 4),
         "message": job.message,
         "busy": job.task is not None,
+        **progress_view(job),
         "error": job.error,
         "source_path": job.source_path,
         "source_name": job.source_name,
@@ -464,6 +466,7 @@ async def job_events(job_id: int, request: Request, once: bool = False) -> Strea
             return {
                 "id": job.id, "status": job.status, "stage": job.stage, "progress": round(job.progress or 0.0, 4),
                 "message": job.message, "busy": job.task is not None, "error": job.error,
+                **progress_view(job),
             }
 
     async def stream():

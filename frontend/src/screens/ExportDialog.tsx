@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, url } from "../api";
-import { Modal, Note, ProgressBar, Spinner, Toggle } from "../components";
+import { Modal, Note, Spinner, TaskProgress, Toggle } from "../components";
 import { formatBytes, formatDate, formatDuration, useJobEvents } from "../lib";
 import type { ExportRecord, Job } from "../types";
 
@@ -115,8 +115,9 @@ export default function ExportDialog({
       ) : exporting || start.isPending || (current && current.status !== "failed") ? (
         <div className="py-10 text-center">
           <div className="text-base font-semibold">Rendering {formatDuration(runtime)} of video</div>
-          <ProgressBar value={live?.progress ?? 0} className="mx-auto mt-6 max-w-md" />
-          <p className="num mt-2 text-ink-300">{live?.message || "Starting"}</p>
+          <div className="mx-auto mt-6 max-w-md">
+            <TaskProgress task={live ?? job} fallback="Starting" />
+          </div>
           <p className="mt-6 text-xs text-ink-400">1080×1920, H.264 high profile, CRF 18, AAC 192 kbps. You can close this; the render keeps going.</p>
         </div>
       ) : (

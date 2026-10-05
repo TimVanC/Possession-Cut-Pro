@@ -68,12 +68,9 @@ export interface JobSummary {
   claude_spent_usd: number;
 }
 
-export interface Job {
+export interface Job extends TaskProgress {
   id: number;
   status: JobStatus;
-  stage: string;
-  progress: number;
-  message: string;
   busy: boolean;
   error: string | null;
   source_path: string;
@@ -268,12 +265,24 @@ export interface RunStartPreview {
   clock?: number;
 }
 
-export interface JobEvent {
+export interface TaskStep {
+  label: string;
+  state: "done" | "active" | "todo";
+}
+
+/** What a running task reports: how far along, which step, roughly how long is left. */
+export interface TaskProgress {
+  progress: number;
+  stage: string;
+  message: string;
+  steps: TaskStep[];
+  eta_seconds: number | null;
+  elapsed_seconds: number | null;
+}
+
+export interface JobEvent extends TaskProgress {
   id: number;
   status: JobStatus;
-  stage: string;
-  progress: number;
-  message: string;
   busy: boolean;
   error: string | null;
 }

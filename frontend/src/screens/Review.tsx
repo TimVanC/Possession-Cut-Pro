@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, url } from "../api";
-import { ConfidenceBadge, Note, ProgressBar, Spinner } from "../components";
+import { ConfidenceBadge, Note, Spinner, TaskProgress } from "../components";
 import { clamp, formatClock, formatDuration, formatSeconds, periodLabel, useJobEvents, useLatest } from "../lib";
 import type { Box, Clip, Job } from "../types";
 import ExportDialog from "./ExportDialog";
@@ -302,12 +302,11 @@ export default function Review() {
       <main className="mx-auto max-w-xl py-16 text-center">
         <h1 className="text-xl font-semibold">Analyzing</h1>
         <p className="mt-1 text-ink-400">{j.source_name}</p>
-        <ProgressBar value={p.progress} className="mt-8" />
-        <p className="num mt-2 text-ink-300">
-          {Math.round(p.progress * 100)}% · {p.message || p.stage}
-        </p>
+        <div className="mx-auto mt-8 max-w-md">
+          <TaskProgress task={p} />
+        </div>
         <p className="mx-auto mt-6 max-w-sm text-xs text-ink-400">
-          The score bug is read twice a second across the whole file, cleaned into a game timeline, matched to play-by-play, and cut at each scoring possession.
+          A full game takes roughly 5 to 10 minutes. You can leave this page; the work carries on.
         </p>
         <button className="btn mt-6" onClick={() => cancel.mutate()} disabled={cancel.isPending}>Cancel</button>
       </main>

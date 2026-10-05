@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, url } from "../api";
-import { Note, ProgressBar, Spinner, StatusBadge } from "../components";
+import { Note, Spinner, StatusBadge, TaskProgress } from "../components";
 import { UploadBox } from "../Upload";
 import { formatBytes, formatDate, formatDuration, gameTitle, jobRoute } from "../lib";
 import type { Job } from "../types";
@@ -48,10 +48,7 @@ function JobCard({ job }: { job: Job }) {
           )}
           {job.busy && (
             <div className="mt-3">
-              <ProgressBar value={job.progress} />
-              <div className="num mt-1 text-xs text-ink-400">
-                {Math.round(job.progress * 100)}% · {job.message || job.stage}
-              </div>
+              <TaskProgress task={job} compact />
             </div>
           )}
           {job.status === "failed" && job.error && (
