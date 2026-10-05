@@ -30,5 +30,22 @@ if (-not (Test-Path ".env")) {
     Write-Host "Created .env from .env.example. Add your ANTHROPIC_API_KEY."
 }
 
+# Without the dev server the engine serves the built page itself (http://127.0.0.1:8000).
+# Build it when it is missing or older than the source.
+if (($args -contains "--no-frontend") -and (Test-Path "frontend\package.json") -and (Get-Command npm -ErrorAction SilentlyContinue)) {
+    $page = "frontend\dist\index.html"
+    $stale = -not (Test-Path $page)
+    if (-not $stale) {
+        $built = (Get-Item $page).LastWriteTime
+        $stale = [bool](Get-ChildItem "frontend\src" -Recurse -File | Where-Object { $_.LastWriteTime -gt $built } | Select-Object -First 1)
+    }
+    if ($stale) {
+        Write-Host "Building the app page..."
+        Push-Location frontend
+        npm run build --silent | Out-Null
+        Pop-Location
+    }
+}
+
 & $py -m possession_cut.dev @args
 exit $LASTEXITCODE

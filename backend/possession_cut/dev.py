@@ -169,7 +169,7 @@ def main() -> int:
 
     hosted = [o for o in settings.allowed_origins if o.startswith("https://")]
     if args.no_frontend and hosted:
-        web_url = hosted[0]
+        web_url = f"{hosted[0]}  (or {web_url})"
     print(f"\n  Possession Cut is starting. Open {web_url}\n  Press Ctrl+C to stop.\n", flush=True)
 
     code = 0

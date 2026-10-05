@@ -1,252 +1,392 @@
 # Build notes
 
-Running log of what was built, decisions taken without asking, and known gaps.
-Finalized at the end of the build; sections are filled in as each step lands.
+What was built, what was verified and how, every decision taken without asking, what is
+still open, and what to test first. Written at the end of the build (2026-10-05).
+
+## Where it stands
+
+All eleven steps of the PRD's build order are in the repo, plus three things added after
+the first real run: uploading a game from the browser, a camera check that trims crowd
+shots off clip edges, and progress steps with a time estimate.
+
+| | State |
+| --- | --- |
+| NBA pipeline (probe, calibrate, sample, timeline, clips, match, export) | Built. Verified on synthetic games against ground truth and on one real broadcast. |
+| Web app (upload, setup, calibrate, review, export) | Built. Driven end to end in a browser on a synthetic game and on the real game. |
+| Claude (vision calibration, re-reading unclear frames, captions) | Built and run live on the real game. About 25 cents for the whole job. |
+| NFL, NHL, MLB adapters | Built and unit tested against recorded league data. Never run on real footage. |
+| Docker | Files written. Not run: Docker is not installed on this machine. |
+| Hosted page talking to the local engine | Deployed on Vercel. The engine's side is tested; the browser's side is not (see Known gaps). |
+| Auto-start at login | Script written. Not run by me: it changes what starts when you log in, so that click is yours. |
+
+Tests: 343 pass. 299 are logic tests that run in seconds; 44 render a synthetic broadcast and
+run the pipeline and the API on it. Lint is clean and the frontend type-checks and builds.
+
+## What to test first with a real NBA game
+
+1. In the project folder, double-click `install-autostart.cmd` once (or `start.cmd` each
+   time). The first start takes a few minutes while it installs what it needs.
+2. Open <https://possession-cut-pro.vercel.app>. Chrome asks once for permission to reach
+   your local network: allow it. If the page stays on "Start the engine to begin" for more
+   than a minute, open <http://127.0.0.1:8000> instead (same app, served by the engine
+   itself) and tell me, because that means the hosted connection needs another look.
+3. Click **Upload a game video** and pick a full broadcast. About a minute for 5 GB.
+4. Game setup: set the date, **Find games**, pick the game, pick the team, leave the start
+   on **Auto: start of the biggest run**, save.
+5. Calibration: check that each field reads what the frame shows (scores, period, clock,
+   shot clock). Click through "Other moments in the file". If a box is off, drag it. Confirm.
+6. Wait for the analysis (5 to 10 minutes). The screen shows the step it is on and the
+   time left.
+7. Review: play the whole cut once with **Play from here through the end**. Look for the
+   things listed under "What to check by eye" below.
+8. Export, then run `python tools/verify_export.py exports/<file>.mp4 --calibration data/jobs/<id>/calibration.json`.
+
+Try a second broadcaster early (TNT, NBC, Prime). Everything below was tuned on one ESPN/ABC game.
+
+## The real-game test (2026 Finals Game 4, Spurs at Knicks)
+
+**The file.** `NBA_20260610_SAS_NYK_1080p60_ABC_mkv.mp4` in Downloads: 5.17 GB, 1280x720
+at 59.94 fps, 2:25:32. The note said the name starts with `NBA_20250610`; it starts with
+`NBA_20260610`. A frame confirmed the game before anything ran: the bug reads SA / NY with
+the Finals logo and "NY LEADS 2-1", at Madison Square Garden on ABC.
+
+**The run, through the app's own screens.**
+
+| Step | Result |
+| --- | --- |
+| Upload (the page's protocol, sent by script) | 71 s, byte-identical copy. An interrupted upload resumed from 50 MB after an engine restart. |
+| Game lookup, date 2026-06-10 | "San Antonio Spurs at New York Knicks, SAS 106, NYK 107, NBA Finals, Game 4" |
+| Auto start | "Down 29 (52-81) at Q3 9:40", after D. Fox's jumper |
+| Calibration | Claude vision, confidence 100%, all seven fields read correctly, no adjustment |
+| Analysis | About 8 minutes. 17,465 samples; Claude re-read the 227 unclear ones |
+| Play-by-play | 109 score changes matched, none unmatched either way; final read as 106-107 |
+| Cut | 22 clips, 6:14, every Knicks point from 52 to 107 |
+| Export | 1080x1920, H.264 High, 59.94 fps, 436 MB. `verify_export.py`: 19 of 19 |
+
+**What the first run got wrong, and what changed.** The first cut had five clips of about
+four seconds, an and-one read as free throws, and a 42 second clip made of two possessions.
+
+1. **The bug is slower than the PRD assumed.** ESPN's bug shows a score 2.2 to 3.8 s after
+   the make (median 2.75 s over 68 baskets); the PRD says 0.5 to 2 s. The shot clock resets
+   when the ball drops, so the make's own reset fell outside the guard and was taken for
+   the start of the possession. Now the last reset before a score is recognised as the make
+   itself, and only signals before it can start a possession.
+2. **Clip ends follow the make.** "Score + 1.5 s" would have ended clips 4 to 5 s after the
+   ball dropped. A clip now ends 2.5 s after the make, but not before the new score has
+   been on screen for half a second, and never later than the PRD's score + 1.5 s. At the
+   lag the PRD assumed, this gives the PRD's own answer.
+3. **Free throws are placed by the measured lag.** The bug's lag is measured from the
+   game's baskets and each free throw window runs from 2 s before the ball drops to 2 s
+   after. With the old fixed window the clip began with the ball already in the air.
+4. **Resets shown as 23.** The graphic sometimes skips 24 and first shows 23. Ten
+   possession changes were being missed that way; one of them caused the 42 second clip.
+   A reset the operator corrects within a moment (24, then 14) now counts too.
+5. **Baskets through a foul.** The clock stops on the whistle, and by the time a slow bug
+   shows the basket it has been stopped for three seconds, which looked like free throws.
+   The test is now how long the clock had been stopped beforehand (27 s at the least for a
+   real free throw in this game; 3 to 4 s for an and-one). When play-by-play is matched it
+   settles the question.
+6. **The bug returning mid-possession.** Two possessions began while the bug was off
+   screen. Those clips now start where the bug returns and are no longer flagged as
+   over-long possessions.
+7. **Crowd shots and close-ups.** One clip opened on five seconds of crowd and a player's
+   face while the clock ran; others ended on a close-up of the scorer. The bug cannot see
+   that, so a camera check was added (see "Camera check" below). It trimmed 6 of 20 clips,
+   14 seconds in all.
+8. **Calibration on a real bug.** ESPN's period, clock and shot clock sit so close that
+   text detection returns them fused ("2ND3:0020"). The local detector now splits those
+   and finds field edges from the pixels. It reaches 100% on this file without Claude.
+9. **The hosted page could not have connected.** The engine answered Chrome's
+   local-network permission check with an error. Fixed and tested.
+
+**How the cut was reviewed.** I looked at every clip of the cut as one frame per second,
+plus the first and last second at four frames per second, before the camera check was
+added. After adding it I confirmed its six trims against those frames and looked at four
+frames of the export. I did not watch the cut at speed and did not listen to it.
+
+**What to check by eye.**
+
+- **Clips 7 and 8** start a few seconds into the possession, because the bug was off screen
+  when it began.
+- **Clips 12 and 21** are long (24.5 s and 28.5 s). The shot clock says they are full
+  possessions ending in late shots. Trim the front in review if they drag.
+- **Clip 17** opens with four seconds from a high, wide camera. It is live play, so it stays.
+- **Clip ends.** Most end about three seconds after the make with the new score just
+  showing. Clips 6, 8 and 17 end slightly earlier, before a close-up, so the score has not
+  ticked over yet.
+- **Free throws** (clips 1 and 15, and the tail of clip 6) are about 5 s per make. The
+  second free throw of clip 1 is shown from a tight camera; it is the shot itself, so it stays.
+- **Audio at the cuts.** Crossfades are verified by measurement on the synthetic game only.
+- **The caption bar** says "NYK leads 3-1", the series after this game. The bug in the
+  picture says 2-1, the series before it.
+
+## Things I did differently from what was asked
+
+You asked to be told afterwards.
+
+- **Upload was added after you saw the first version.** The PRD says files are registered
+  by path and nothing is uploaded. Both now exist: the Upload box is the front door, and
+  "pick it from disk" and `inbox/` remain for files already on the machine.
+- **The engine stays on your computer.** The Vercel deployment is the frontend only. See
+  "Path to a hosted version" for what running it on a server takes.
+- **Clip ends and free throw windows follow the make**, not the score (items 2 and 3 above).
+- **Play-by-play decides free throw versus basket when matched.** You said play-by-play
+  only labels and cross-checks. Timing still comes only from the bug; this is the
+  cross-check overriding a guess the bug cannot make reliably.
+- **Camera check**: new, on by default, not in the PRD.
+- **ffmpeg was installed** with `winget install Gyan.FFmpeg`. The PRD assumes it is there.
+- **Windows launchers** (`start.cmd`, `dev.cmd`, `dev.ps1`, autostart) beside the Mac ones.
+- **`opencv-python`, not `-headless`**: the OCR package depends on it and the two conflict.
+- **Game lookup uses `scoreboardv3`** directly; `nba_api`'s scoreboard returned half-empty
+  rows for the 2026 Finals.
+- **Game lookup and the calibration read-out run in the API**, not the worker, so they
+  answer while a long analysis is running.
+- **Export uses seeked inputs and the concat filter**, not the concat demuxer, which cannot
+  cut on exact frames or crossfade audio.
+- **Title and caption are drawn with Pillow**, not ffmpeg `drawtext`, so any text works.
+- **The local bug detector is a full route**, not a fallback stub, because Claude could not
+  be reached for most of the build.
+- **Two start signals beyond the PRD's three**: the team's own previous score, and the bug
+  returning from a break.
 
 ## Decision log
 
-### Environment (step 1)
+### Environment
 
-- **This machine is Windows 11, the PRD says Mac.** Everything is built cross-platform.
-  `dev.sh` / `make dev` cover Mac and Linux; `dev.cmd` / `dev.ps1` cover Windows. All four
-  call the same Python launcher (`python -m possession_cut.dev`).
-- **ffmpeg was not installed.** Installed FFmpeg 9.0.2 with `winget install Gyan.FFmpeg`
-  (user scope). A shell opened before the install will not have it on PATH, so the app also
-  looks in the WinGet links folder. `FFMPEG_PATH` / `FFPROBE_PATH` in `.env` override.
+- **This machine is Windows 11, the PRD says Mac.** Everything is cross-platform. `dev.sh`
+  and `make dev` cover Mac and Linux; the `.cmd` and `.ps1` files cover Windows. All call
+  the same launcher (`python -m possession_cut.dev`).
 - **Python 3.12 venv** at `.venv` (3.13 is the system default; the PRD pins 3.12).
-- **The API key lives only in `.env`**, which is gitignored. It is never committed.
-- **OpenCV is the standard `opencv-python` wheel, not `-headless`.** `rapidocr-onnxruntime`
-  depends on it directly and the two wheels conflict when both are installed. No GUI
-  features are used. The Docker image installs `libgl1` for it.
-- **The repo sits inside OneDrive.** `data/`, `inbox/` and `exports/` default to the repo
-  folder, which means OneDrive will try to sync multi-GB files. Point `DATA_DIR`,
-  `INBOX_DIR` and `EXPORTS_DIR` at a folder outside OneDrive in `.env` if that bites.
+- **The API key and workspace ID live only in `.env`**, which is gitignored.
+- **The repo sits inside OneDrive.** Uploads therefore go outside it (see Upload). `data/`,
+  `inbox/` and `exports/` still default to the repo folder; move them with `DATA_DIR`,
+  `INBOX_DIR` and `EXPORTS_DIR` if syncing them becomes a nuisance.
 
-### Sampling and OCR (steps 3 and 4)
+### Sampling and OCR
 
-- **Sample timestamps are frame-exact.** ffmpeg's `fps` filter, with its default rounding,
+- **Sample timestamps are frame-exact.** ffmpeg's `fps` filter, with default rounding,
   returns a frame about a quarter second later than the slot it labels. The sampler uses
-  `round=up`, and a test decodes the per-frame barcode to prove sample k is the frame at
-  k/fps. Without this every boundary would have been 0.23 s late.
-- **Digit-restricted OCR is done at the probability level.** The recognizer's per-step
-  output is masked to the characters a field may contain (digits for scores, digits plus
-  `:` and `.` for clocks) before CTC decoding, rather than filtering text afterwards.
-  The models are the PP-OCRv4 ONNX files that ship inside `rapidocr-onnxruntime`, so
-  nothing is downloaded at runtime.
-- **Field crops are trimmed to the ink before recognition.** A "7" in a box sized for
-  three digits otherwise reads unreliably. On the synthetic game this took misreads from
-  1 in 700 to 0 in 3,500.
-- **A field is re-read only when its pixels change** (small signature compare). The clock
-  changes once a second and scores rarely, so most samples cost one or two OCR calls.
+  `round=up`, and a test decodes a per-frame barcode to prove sample k is the frame at k/fps.
+- **Digit-restricted OCR is done at the probability level.** The recognizer's output is
+  masked to the characters a field may contain before decoding. The models are the
+  PP-OCRv4 ONNX files that ship inside `rapidocr-onnxruntime`; nothing is downloaded.
+- **Field crops are trimmed to the ink before recognition.** On the synthetic game this
+  took misreads from 1 in 700 to 0 in 3,500.
+- **A field is re-read only when its pixels change**, so most samples cost one or two OCR calls.
+- **Crops are taken on even pixel boundaries.** ffmpeg silently rounds odd crop offsets on
+  4:2:0 video. A benchmark at 1080p exposed this; a test covers it.
 
-### Calibration (step 3)
+### Calibration
 
-- **Three routes, one validation.** (1) A saved template that matches by image similarity,
-  (2) Claude vision for where the bug is and which field is which, (3) a fully local
-  detector. All three end in the same checks: the bug region must be static across frames,
-  and the fields must actually parse as scores and a clock.
-- **Claude's boxes are never used raw.** Vision models place boxes approximately. The bug
-  box is snapped to the static region and each field box to locally detected text, which
-  is what makes sub-ROIs tight enough for OCR. Claude contributes semantics (which text is
-  which), local detection contributes pixels.
-- **The local detector is a full route, not a stub**, because the Claude route could not be
-  run live (see "Claude API key" below). It finds the recurring game clock, grows the
-  static region around it into the bug box, zooms in, and assigns fields by what they
-  contain (clock pattern, period words, 2-4 letter labels, numbers next to labels, the
-  small number next to the clock).
-- **Score boxes are padded for a third digit, but padding stops at artwork.** A team logo
-  beside a score otherwise reads as an extra "1".
-- **Bug visibility is image similarity against the template's reference crop**, judged on
-  the better half of six slices so a score animation covering one team block does not
-  count as "bug hidden". Commercials with numbers in the same screen position do not match.
+- **Three routes, one validation**: a saved template that matches by image, Claude vision,
+  and a fully local detector. All end in the same checks: the bug region must be static
+  across frames, and the fields must parse as scores and a clock.
+- **Claude's boxes are never used raw.** The bug box is snapped to the static region and
+  each field to the text actually there. Claude says which text is which; local detection
+  supplies the pixels.
+- **Field edges come from ink, not from text boxes.** Along the bug's main row, a column
+  that never has ink in any frame is a gap between fields. That is what separates
+  "7:52" from "13" when the detector fuses them.
+- **Score boxes are padded for a third digit, but padding stops at artwork** such as a logo.
+- **Bug visibility is image similarity against the template**, judged on the better half
+  of six slices, so a score animation over one team does not count as "bug hidden".
 - **Crop guard beyond the PRD rule.** The rule (full height, width = bug width / 0.78,
-  centred on the bug, clamped) is applied as written. One addition: a small corner bug
-  would yield a crop narrower than it is tall, so in that case the crop falls back to the
-  reference 1.18:1 shape, placed to keep the whole bug inside it. Editable in calibration.
+  centred, clamped) is applied as written. A small corner bug would give a crop narrower
+  than it is tall, so that case falls back to the reference 1.18:1 shape.
 
-### Claude API key
+### Claude
 
-- The key supplied for this build authenticates but is **not scoped to a workspace**. The
-  Messages API rejects it without an `anthropic-workspace-id` header, and the key cannot
-  list workspaces. `ANTHROPIC_WORKSPACE_ID` was added to `.env` for this.
-- Consequence: **no Claude call has been made live.** Vision calibration, the low-confidence
-  OCR fallback and caption writing are implemented and tested against mocked responses
-  only. Everything else was verified on the local route.
-- When Claude is used, requests go to `CLAUDE_MODEL` with structured outputs
-  (`output_config.format`), adaptive thinking at low/medium effort, and server-side refusal
-  fallback (`fallbacks: "default"`), falling back to a plain request if the account does
-  not accept that beta.
+- The key supplied is not scoped to a workspace, so requests carry
+  `ANTHROPIC_WORKSPACE_ID`. With it set, all three uses ran live on the real game:
+  vision calibration (8 cents), re-reading 227 unclear samples on 29 contact sheets, and
+  the caption. The per-job budget is 2 dollars (`CLAUDE_BUDGET_PER_JOB_USD`).
+- Requests use `CLAUDE_MODEL` (default `claude-sonnet-5-5`) with structured outputs and the
+  server-side fallback beta, dropping to a plain request if the account does not accept it.
+- The re-read declines to run when over a quarter of samples read poorly; that is a
+  calibration problem, not something to pay Claude to paper over.
 
-### Timeline, events and clip boundaries (steps 4 and 5)
+### Timeline, events and clip boundaries
 
 - **Cleaning is global, not greedy.** "Scores never decrease, the clock only runs down" is
-  enforced by keeping the longest consistent chain of reads (longest non-decreasing
-  subsequence over game time; a weighted version over score runs). A single confident
-  misread therefore cannot poison everything after it, which a running-maximum would.
-- **Replays that re-air the bug** are caught two ways: the clock sitting behind the game
-  for 3+ samples, or the score sitting below one that already held. A new score that
-  shows for two samples, is followed by a replay of the old score, then returns, is
-  stamped at its first showing.
-- **Known limit:** the last second or two of a bug-carrying replay can show exactly the
-  live state (same stopped clock, same score). The bug cannot tell that apart from live.
-  It does not land in a clip unless a free throw is made within 3 s of the replay ending.
-  Fixing it properly needs scene-cut detection on the picture, which is not built.
-- **Possession start, as built** = latest of four signals, minus 1 s pre-roll:
-  1. shot clock jumping up to 24/14, taken at the moment it starts counting down again
-     (after an opponent basket the shot clock sits on 24 until the inbound, and the
-     inbound is the real start);
-  2. game clock starting after a stoppage of 2.4 s or more;
-  3. the opponent's score appearing (no pre-roll here, so their make is not shown);
-  4. the followed team's own previous score (a possession cannot start before it).
-  Two additions to the PRD's three signals: number 4, and the shot clock switching off
-  in the last 24 s of a period, which marks a possession change.
-- **Signals within 2.5 s of the score appearing are ignored**, because the make itself
-  resets the shot clock and the bug shows the score 0.5 to 2 s later.
-- **Free throw vs basket:** +1 is a free throw. +2/+3 with the clock stopped for 3.5 s
-  beforehand is a trip to the line whose first make was not seen, and is clipped as free
-  throws with a warning. A basket in the last two minutes (clock stops on the make) is
-  not mistaken for one.
-- **And-one:** a free throw by the same team, next score in the game, clock within 1 s of
-  where the basket left it, rides on the basket clip as a trailing 4 s segment.
-- **Clips have segments.** `Clip.segments` holds the kept ranges; `src_in`/`src_out` are
-  the outer bounds. Needed for free-throw trips, and-ones, and any not-live stretch cut
-  out of the middle.
-- **Not-live cut-outs are conservative**: widened to the neighbouring live samples (up to
-  0.5 s each side), so no frame of a replay or commercial can leak in.
-- **A score first seen after a break** (the broadcast cut away before the bug updated)
-  ends its clip at the cutaway rather than after it.
-- **Unobservable possession changes.** With the shot clock off before and after (last
-  24 s of a period), a rebound or steal leaves no trace on the bug. Those clips start at
-  the previous visible signal, up to the 30 s cap, and may merge with the team's previous
-  clip. The synthetic ground truth flags these (`start_observable: false`) and they are
-  graded on "contains the whole possession" instead of the 1.5 s start tolerance.
+  enforced by keeping the longest consistent chain of reads, so one confident misread
+  cannot poison what follows.
+- **Replays that re-air the bug** are caught by the clock sitting behind the game, or the
+  score sitting below one that already held.
+- **Possession start** = the latest of these that happened before the make, less 1 s:
+  1. the shot clock jumping to 24 or 14, taken when it starts counting down again;
+  2. the game clock starting after a stoppage of 2.4 s or more;
+  3. the opponent's score appearing (no pre-roll, so their make is not shown);
+  4. the followed team's own previous score;
+  5. the bug returning from a break of 4 s or more;
+  plus the shot clock switching off in the last 24 s of a period.
+- **The make** is the last shot clock reset within 4.5 s before the score (8 s if the shot
+  clock never ran in between). With the shot clock off, the game clock stopping does the
+  same job: it stops on a make in the last minutes.
+- **And-one:** a free throw by the same team, next score in the game, out of the same
+  stoppage as the basket, rides on the basket clip as a trailing segment. A slow bug can
+  show the last free throw after play has resumed, so stoppages are compared by the clock
+  value they held at, not by the clock when the score appears.
+- **Clips have segments.** `Clip.segments` holds the kept ranges; `src_in` and `src_out`
+  are the outer bounds.
+- **Not-live cut-outs are conservative**: widened to the neighbouring live samples, so no
+  frame of a replay or commercial can leak in.
+- **A score first seen after a break** ends its clip at the cutaway rather than after it.
 - **Shot clock reads are validated against physics**: it counts down in real time, holds,
-  or jumps to a reset value. Anything else is blanked unless it persists for 2 s. A reset
-  must land on 24 or 14 and be followed by a consistent read.
+  or jumps to a reset value. A reset must land on 24, 14, or one below with consistent
+  reads after it.
 
-### Verification so far
+### Camera check
 
-- Logic on simulated perfect reads: 120 random team-games, 1,774 clips, 0 problems; starts
-  land 0.0 to 1.4 s before the scripted possession start (target is 1.0), ends within 0.5 s.
-- With 1% and 3% of all reads randomly corrupted: every score still found, no false clips,
-  no not-live leaks, starts within 2.5 s and ends within 2 s. At 6% it degrades.
-- On the rendered video with real OCR: home 9/9 and away 5/5 clips, 0 false, 0 leaks,
-  start errors -1.1 to -0.6 s, end errors under 0.5 s.
+- The bug says play is live; it does not say what the director shows. `pipeline/camera.py`
+  samples small frames of each scoring clip twice a second, learns which colour is the
+  playing surface (the commonest colour across the clips: hardwood here), and calls a
+  frame a cutaway when it shows under 15% of the usual amount of it. On the real game,
+  game-camera frames showed 65% to 170% of the usual amount and cutaways under 5%.
+- It trims a cutaway that begins within 2.5 s of a clip's start, and one that runs to the
+  clip's end (at most 2 s). It never touches the middle of a clip, a free throw window,
+  or a clip that would drop under the minimum length. A possession shown entirely from
+  another camera is left alone.
+- "Game camera only" in game setup turns it off.
 
-### NBA data, matching, start point (step 6)
+### NBA data, matching, start point
 
-- **Game lookup uses `scoreboardv3`** on stats.nba.com (works for any season, gives final
-  scores and labels such as "NBA Finals"). `scoreboardv2`, which nba_api wraps, returned
-  half-empty rows for the 2026 Finals, so it is not used.
-- **Play-by-play sources, in order:** cdn.nba.com liveData (recent seasons only; 403 for
-  e.g. 2016), stats.nba.com `playbyplayv3` (all seasons), then the same endpoint through
-  `nba_api` as a last resort. All with browser-like headers and retry with backoff, cached
-  per game ID under `data/cache/nba/`. `nba_api` also supplies the offline team list.
-- **Points are derived from the running score**, not from the action type, so both feeds
-  parse identically (a test checks the two recorded feeds agree play for play).
-- **Recorded fixtures:** real responses for 2026 Finals Game 4 (game ID `0042500404`,
-  SAS 106 @ NYK 107, 2026-06-10) are in `backend/tests/fixtures/nba/`.
-- **Matching runs three passes, strictest first:** running score + period + clock within
-  3 s; then the PRD rule alone (period + clock within 3 s + team + points), which covers a
-  misread score on the bug; then running score with the clock up to 30 s off, for a score
-  that showed late after a replay. A loose match can never take a play a strict one wanted.
-- **Auto start ("biggest run")** = the last opponent score that put the followed team down
-  by its largest deficit; the cut begins strictly after it. Resolved from play-by-play when
-  available, otherwise from the bug's own score track, and the two agree in tests.
-- **Sidecar play-by-play:** if `<video>.pbp.json` sits next to the source it is used instead
-  of the league API. That is how the synthetic game gets labels, and it works for games no
-  API covers.
-- **Game lookup runs in the API process**, not the worker. The PRD says the worker is the
-  only part that calls league APIs, but the worker handles one job at a time, and a lookup
-  queued behind a 10 minute analysis would freeze the New Job form. Play-by-play for
-  analysis is still fetched by the worker.
+- **Play-by-play sources, in order:** cdn.nba.com liveData (recent seasons), stats.nba.com
+  `playbyplayv3` (all seasons), then `nba_api`. Cached per game under `data/cache/nba/`.
+- **Points are derived from the running score**, so both feeds parse identically.
+- **Recorded fixtures** for 2026 Finals Game 4 (game ID `0042500404`) are in
+  `backend/tests/fixtures/nba/`.
+- **Matching runs three passes, strictest first**: running score + period + clock within
+  3 s; the PRD rule alone; then running score with the clock up to 30 s off.
+- **Auto start** = the last opponent score that put the team down by its largest deficit.
+- **Sidecar play-by-play:** `<video>.pbp.json` beside the source is used instead of the
+  league API. That is how the synthetic game gets labels.
 
-### Export (step 7)
+### Export
 
-- **One ffmpeg run, one encode.** Each segment is its own seeked input (`-ss` before `-i`,
-  which is frame accurate when transcoding), trimmed in a filter graph, concatenated,
-  cropped, scaled to 1080 wide and padded to 1080x1920. The PRD says "a generated concat
-  list"; the concat *demuxer* cannot cut on exact frames or crossfade audio, so the list
-  is a list of seeked inputs feeding the concat *filter* instead. Same single pass.
-- **Seeks are biased half a frame early and trims sit half a frame before the wanted
-  frame**, so float rounding can never take the neighbouring frame. Verified: every
-  exported frame's barcode equals the planned source frame, in order.
-- **Audio crossfade is 2 whole frames wide** (66.7 ms at 30 fps, 80 ms at 25, 83 ms at 24),
-  inside the PRD's 60 to 100 ms. Each segment's audio is taken one frame longer on both
-  sides and each crossfade removes exactly that, so audio and video stay the same length
-  through any number of cuts. Verified with the synthetic beeps landing on their baskets.
-- **Title and caption are rendered to a transparent PNG with Pillow and overlaid**, not
-  drawn with ffmpeg `drawtext`. Any title text works (quotes, colons, percent signs) and
-  no font path has to be escaped on Windows. Font: Arial Bold / Segoe UI Bold on Windows,
-  Arial Bold / Helvetica on macOS, DejaVu Sans Bold in Docker. The title sits at the
-  bottom of the top bar, just above the picture, clear of phone UI at the top of the screen.
-- **More than 48 segments render in batches** (x264 video + lossless audio), then the
-  batches are joined with video stream copy and a single AAC encode over the whole cut, so
-  there are no AAC seams. Batch joins get a 20 ms fade instead of a crossfade.
-- **Sources a browser cannot play** (MKV, TS, AC-3 audio, HEVC) get a preview proxy:
-  video copied if it is H.264, otherwise transcoded to 540p; audio to AAC. Review plays
-  the proxy; export always cuts from the original.
-- **Anamorphic and interlaced sources** are squared and deinterlaced (bwdif) in the export
-  graph. Not tested on real files of those kinds.
-- **Claude OCR fallback** re-reads only the samples between the last read of an old score
-  and the first read of a new one, stacked eight to a contact sheet, within the per-job
-  budget. It declines to run when over a quarter of samples read poorly (that is a
-  calibration problem). Tested with a stand-in for Claude only.
-- **Caption**: Claude writes it from the facts when available; otherwise a template that
-  states only what the data supports.
+- **One ffmpeg run, one encode.** Each segment is its own seeked input, trimmed in a filter
+  graph, concatenated, cropped, scaled to 1080 wide and padded to 1080x1920.
+- **Frame-exact.** Seeks are biased half a frame early and trims sit half a frame before
+  the wanted frame. Verified: every exported frame's barcode equals the planned source frame.
+- **Audio crossfade is two whole frames wide** (66.7 ms at 30 fps), inside the PRD's 60 to
+  100 ms, and audio and video stay the same length through any number of cuts.
+- **More than 48 segments render in batches**, joined with video stream copy and a single
+  AAC encode, so there are no audio seams.
+- **Sources a browser cannot play** (MKV, TS, AC-3, HEVC) get a preview proxy for review.
+  Export always cuts from the original.
+- **Output frame rate is the source's**, up to 60. The real export is 59.94 fps.
 
-### Benchmark (analysis speed)
+### Upload
 
-- `tools/benchmark_analysis.py --minutes 150 --height 1080` on this machine (i5-12600K,
-  6 workers): **147.5 minutes of 1080p analyzed in 7.1 minutes** (21x real time; 17,704
-  samples, 14,617 OCR calls, 98,041 cache hits), while another render was using the CPU.
-  The PRD target is under 15 minutes.
-- The first benchmark run exposed a real bug: ffmpeg silently rounds odd crop offsets on
-  4:2:0 video, so at 1080p the raw frames coming back were not the size requested and
-  every sample was garbage. The sampler now crops an even-aligned box and slices the
-  exact region out of it. A test covers odd offsets and sizes.
+- The page sends the file to the engine in 8 MB pieces (`/api/uploads`). The engine
+  appends them in order and can say how much it has, so a dropped connection or an engine
+  restart resumes instead of starting again.
+- **Uploads are kept outside cloud-synced folders.** When `data/` sits inside OneDrive,
+  Dropbox or iCloud, uploads go to the computer's local app-data folder. On this machine
+  `.env` sets `UPLOADS_DIR` to `Videos\Possession Cut\uploads`.
+- **An uploaded file belongs to the app** and is deleted with its job, unless another job
+  uses it. A file picked from disk or dropped in `inbox/` is never deleted.
+- **Windows locks.** Antivirus and the search indexer briefly lock a file that is being
+  written; the first real upload hit this after six pieces. The engine waits up to six
+  seconds for the lock to clear, then asks the page to retry.
+- Refused before any data is sent: a file that is not a video, and a disk without room.
 
-### App: worker, API, frontend (step 8)
+### App
 
-- **Job queue is the jobs table.** `Job.task` holds what is queued (calibrate / analyze /
-  export); the worker claims one at a time and writes progress back to the row. No broker.
-  A worker that dies mid-task requeues it on restart. Each job keeps `logs/worker.log`.
-- **Status flow:** draft -> calibrating -> ready -> analyzing -> review -> exporting -> done,
-  with failed from anywhere. A failed or cancelled task puts the job back where it was.
+- **Job queue is the jobs table.** The worker claims one task at a time and writes
+  progress back to the row. A worker that dies mid-task requeues it on restart.
 - **Re-analysis is cheap.** Bug reads are cached against the calibration, so changing the
-  team, start point or toggles and re-running takes seconds, not minutes.
-- **Progress uses server-sent events** (`GET /api/jobs/{id}/events`), which close themselves
-  five seconds after a job goes idle; the browser reconnects while it cares.
-- **Two things run in the API process on purpose** (the PRD puts all work in the worker):
-  game lookup, and the calibration screen's live OCR read-out on frames already extracted.
-  Both need to answer in under a second while the worker may be busy for minutes.
-- **File picker** lists only folders and video files under `ALLOWED_ROOTS` (plus inbox and
-  exports). Files are registered by path; nothing is uploaded.
-- **Inbox** is polled every 10 s by the worker; a file becomes a draft once its size is the
-  same on two polls in a row.
-- **Delete** removes the job row, its clips and its artifact folder. It never touches the
-  source file or anything in `exports/`.
-- **Review player** plays the source file (or its proxy) through `/api/media` with the crop
-  applied in CSS, exactly as the PRD describes, so review is instant. A requestAnimationFrame
-  loop keeps playback inside each clip's kept segments (hopping over cut-out stretches) and
-  drives "play from here through the end".
-- **Calibration screen** has two editors: the bug zoomed (to adjust field boxes precisely)
-  and the whole frame (bug box and export crop). Moving the bug carries its fields with it.
-  The crop follows the PRD rule as the bug box moves unless its sides are dragged.
-- **Hosted frontend (Vercel).** `frontend/vercel.json` deploys the static frontend only.
-  The page looks for an engine on its own origin first, then at `http://127.0.0.1:8000`.
-  For a hosted copy to reach the local engine, set `CORS_ORIGINS=https://<your-app>.vercel.app`
-  in `.env`. The backend is not deployed anywhere: it needs local files, ffmpeg and a
-  long-running worker, and an unauthenticated public copy would expose the file browser.
-- **No database migrations.** The schema is created on first run. If a later version
-  changes a table, delete `data/possession_cut.db` (jobs are lost, templates too).
+  team, start point or toggles and re-running takes about 30 seconds on a full game.
+- **Progress steps and the time estimate** are worked out in the API from what the worker
+  already records. The estimate is time so far scaled by how much of the bar is left.
+- **The connect screen keeps looking** for the engine and opens by itself once it is up.
+- **One engine at a time.** Starting a second copy exits quietly.
+- **No database migrations.** The schema is created on first run. Nothing added since the
+  first version needed a new column.
 
-### UI run-through on the synthetic game (step 11, done early)
+### Benchmark
 
-Driven through the real UI in a browser: dropped the file in `inbox/`, opened the draft,
-checked that game lookup returns the real 2026-06-10 Finals game, saved the setup,
-calibration found the bug at 100% with no adjustment, confirmed, analysis produced 9 clips
-with 0 unmatched plays, toggled one clip off and nudged its in and out points with the
-keyboard, reloaded (edits were still there), played the cut in sequence (the disabled clip
-was skipped and the gap between two free throws was hopped), exported. `tools/verify_export.py`
-then passed 23 of 23 checks on that file, including the frame-by-frame barcode check.
+`tools/benchmark_analysis.py --minutes 150 --height 1080` on this machine (i5-12600K, 6
+workers): 147.5 minutes of 1080p analyzed in 7.1 minutes (21x real time). The real 720p60
+game sampled at 17 to 29x real time depending on what else was running. The PRD target is
+under 15 minutes.
+
+## Known gaps
+
+- **The hosted page reaching the local engine is untested in a real browser.** My test
+  browser blocks a public page from calling a local address. What is tested: the engine
+  answers Chrome's permission check correctly for the listed site and refuses others.
+  `http://127.0.0.1:8000` serves the same app with no cross-site step at all.
+- **`install-autostart.cmd` has not been run.** In particular I have not seen whether any
+  window flashes at login.
+- **One real game.** The lag handling, the 23-reset rule and the free throw test are tuned
+  on ESPN/ABC's bug.
+- **Replays that keep the live bug on screen.** During a dead ball some broadcasts play a
+  replay under the live bug. The bug cannot show that, and the camera check only looks at
+  clip edges and only at colour, so a replay from the main camera angle would pass. None
+  turned up in this cut.
+- **The tail of a replay that re-airs the bug** can match the live state exactly for a
+  second or two.
+- **The camera check depends on a surface colour.** It should carry to football, hockey
+  and baseball wide shots, but a close-up with grass behind the player would not be
+  caught. Tested on one real NBA game and synthetic footage.
+- **NFL, NHL, MLB** have never seen real footage. Known holes: the calibration read-out
+  and the Claude re-read parse fields generically, so MLB innings and NFL ":05" clocks
+  show as unreadable there; game-time start points need a clock, so they do not work for
+  MLB; MLB halves must OCR for bottom-half runs to match; an NHL shootout winner has no
+  play-by-play event; overtime lengths are not game-specific. NFL drive mode is not built.
+- **Docker** is unrun.
+- **Anamorphic and interlaced sources** are handled in the export graph but untested on
+  real files.
+- **The time estimate is simple.** It is steady during the long stretches and jumpy in
+  the first seconds of a task.
+- **Uploads have no login.** The engine listens on this computer only, which is what
+  makes that acceptable.
+- **Publishing** (TikTok and the rest) is an interface only, as the PRD scopes it.
+
+## Path to a hosted version
+
+What you have is a hosted page and a local engine: it works like a website on the
+computer the engine runs on. To use it from any device the engine has to live on a server.
+
+Why not Vercel alone: a Vercel function cannot run ffmpeg over a 5 GB file for several
+minutes, has no disk to keep the file on, and Vercel's free file storage stops at 1 GB.
+Neon would hold the job records but that is the small part.
+
+The shortest route keeps the app as it is and moves it:
+
+| Piece | What | Rough cost |
+| --- | --- | --- |
+| Server | One machine with 4 or more cores and a 40 GB or larger disk, running the existing Docker image (API, worker, SQLite, files on the disk). Fly.io, Railway, Render or a Hetzner VPS. | 6 to 10 dollars a month |
+| Login | A password or sign-in in front of everything. Not built; required before the address is public. | none |
+| Frontend | The existing Vercel site, pointed at the server (`VITE_API_BASE`). | free tier |
+| Clean-up | Delete uploads and exports after some days so the disk does not fill. | none |
+
+What changes for you: each game is uploaded over your home connection, which is roughly
+20 to 70 minutes for 5 GB on typical upload speeds, against about a minute now. The upload
+screen is the same one and already resumes after a drop.
+
+A larger build would put uploads in object storage, records in Neon and run the worker
+on demand. It only pays off with several users, and I would not start there.
+
+## Vercel
+
+The project `possession-cut-pro` deploys the frontend only, from the `frontend` directory:
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+}
+```
+
+Vercel had suggested a two-service setup and asked for three things to be confirmed:
+
+- **Service names:** one project, the frontend. There is no backend service.
+- **What is public:** the static page only. It holds no data and no keys.
+- **Bindings:** none. The page finds the engine at `http://127.0.0.1:8000` in the browser.
+
+The engine allows that site because `.env` on this machine has
+`CORS_ORIGINS=https://possession-cut-pro.vercel.app`. A different domain needs adding there.

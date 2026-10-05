@@ -45,7 +45,7 @@ def test_clip_details_on_the_coverage_game(coverage_script):
     assert [c.points for c in clips] == [2, 3, 2, 3, 2, 3, 2, 2, 2]
     ft = clips[2]
     assert len(ft.segments) == 2, "two made free throws, the walk between them cut out"
-    assert all(b - a == pytest.approx(4.0, abs=0.01) for a, b in ft.segments), "3 s before to 1 s after each make"
+    assert all(b - a == pytest.approx(4.0, abs=0.01) for a, b in ft.segments), "2 s either side of each make"
     and_one = clips[3]
     assert len(and_one.segments) == 2 and and_one.points == 3, "basket, then its free throw as a trailing segment"
     assert and_one.segments[1][1] - and_one.segments[1][0] == pytest.approx(4.0, abs=0.01)

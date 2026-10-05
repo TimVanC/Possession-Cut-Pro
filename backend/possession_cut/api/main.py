@@ -9,6 +9,7 @@ so one port is all there is.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -37,19 +38,23 @@ async def lifespan(_app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="Possession Cut", version=__version__, lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.allowed_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        max_age=3600,
-        expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
-    )
+    cors: dict = {
+        "allow_origins": settings.allowed_origins,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+        "max_age": 3600,
+        "expose_headers": ["Content-Range", "Accept-Ranges", "Content-Length"],
+    }
+    if "allow_private_network" in inspect.signature(CORSMiddleware.__init__).parameters:
+        # A hosted (https) copy of the page calling this local API is a public-to-private
+        # request. Chrome asks for it by name on the preflight, and Starlette answers 400
+        # unless told the listed origins may do that.
+        cors["allow_private_network"] = True
+    app.add_middleware(CORSMiddleware, **cors)
 
     @app.middleware("http")
     async def private_network_access(request: Request, call_next):
-        """A hosted copy of the frontend (https) calling this local API is a public-to-private
-        request; Chrome asks for this header on the preflight before allowing it."""
+        """The same permission for a Starlette too old to know ``allow_private_network``."""
         response = await call_next(request)
         origin = request.headers.get("origin", "").rstrip("/")
         if origin in settings.allowed_origins and request.headers.get("access-control-request-private-network"):
