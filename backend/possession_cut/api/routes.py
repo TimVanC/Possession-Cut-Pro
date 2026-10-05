@@ -46,6 +46,8 @@ from .uploads import is_upload
 router = APIRouter(prefix="/api")
 
 BUSY = ("calibrating", "analyzing", "exporting")
+# which commit a hosted copy was built from (Railway provides it), so "is the new build live?" has an answer
+BUILD = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")[:7]
 
 
 # -- helpers ----------------------------------------------------------------------------
@@ -175,7 +177,7 @@ def health(request: Request) -> dict:
     }
     if not auth["authenticated"]:
         # enough for the page to show the sign-in screen, and nothing about the machine
-        return {"ok": True, "version": __version__, "hosted": settings.hosted, "auth": auth}
+        return {"ok": True, "version": __version__, "build": BUILD, "hosted": settings.hosted, "auth": auth}
     try:
         ffmpeg_bin()
         ffmpeg_ok = True
@@ -185,6 +187,7 @@ def health(request: Request) -> dict:
     return {
         "ok": True,
         "version": __version__,
+        "build": BUILD,
         "hosted": settings.hosted,
         "auth": auth,
         "ffmpeg": ffmpeg_ok,

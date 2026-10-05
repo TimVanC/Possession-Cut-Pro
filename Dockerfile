@@ -28,7 +28,8 @@ RUN pip install ./backend && pip install -e ./backend --no-deps
 COPY --from=web /web/dist frontend/dist
 COPY tools tools
 RUN mkdir -p inbox data exports /games
-# listens on $PORT when the host sets one (Railway does), otherwise 8000
+# Listens on $PORT when the host sets one (Railway does), otherwise 8000. On a server, run
+# `python -m possession_cut.selfcheck` in this image before each deploy.
 EXPOSE 8000
 # the launcher runs the API (which also serves the built frontend) and the worker together
 CMD ["python", "-m", "possession_cut.dev", "--no-frontend"]

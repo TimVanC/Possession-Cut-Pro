@@ -402,7 +402,7 @@ the server's disk: no file picker, no job from a path, no "reveal in folder".
 
 **The self-check.** `python -m possession_cut.selfcheck` renders two minutes of a
 scripted game and runs calibration, analysis and export on it, checking each against the
-script. Railway runs it before every deploy (`railway.json`), so a build with a broken
+script. Railway runs it before every deploy (the service's pre-deploy command), so a build with a broken
 ffmpeg, OCR model or font is refused instead of going live. It takes about two minutes
 here.
 

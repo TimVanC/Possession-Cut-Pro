@@ -100,8 +100,11 @@ Without `make` (Windows): `cd backend` then `..\.venv\Scripts\python -m pytest`.
 ## Hosted on a server (Railway)
 
 The whole app (page, API, worker, ffmpeg) runs as one container from the `Dockerfile`, so
-it works from any device with nothing installed. `railway.json` tells Railway how to
-build and health-check it.
+it works from any device with nothing installed.
+
+Service settings (Railway dashboard, Settings): build from `Dockerfile`; pre-deploy
+command `python -m possession_cut.selfcheck`; health check path `/api/health`; restart on
+failure. Railway's `railway.json` config file is deprecated, so these live on the service.
 
 Set these variables on the service:
 

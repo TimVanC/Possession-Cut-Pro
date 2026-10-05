@@ -56,7 +56,7 @@ def test_nothing_is_served_without_signing_in(hosted):
     assert health.status_code == 200
     body = health.json()
     assert body["auth"] == {"required": True, "authenticated": False, "configured": True} and body["hosted"] is True
-    assert set(body) == {"ok", "version", "hosted", "auth"}, "nothing about the machine before sign-in"
+    assert set(body) == {"ok", "version", "build", "hosted", "auth"}, "nothing about the machine before sign-in"
 
     for method, path in (
         ("get", "/api/jobs"), ("get", "/api/sports"), ("get", "/api/templates"), ("post", "/api/uploads"),
