@@ -5,9 +5,10 @@ still open, and what to test first. Written at the end of the build (2026-10-05)
 
 ## Where it stands
 
-All eleven steps of the PRD's build order are in the repo, plus three things added after
+All eleven steps of the PRD's build order are in the repo, plus four things added after
 the first real run: uploading a game from the browser, a camera check that trims crowd
-shots off clip edges, and progress steps with a time estimate.
+shots off clip edges, progress steps with a time estimate, and a hosted copy on Railway
+behind a password.
 
 | | State |
 | --- | --- |
@@ -15,7 +16,8 @@ shots off clip edges, and progress steps with a time estimate.
 | Web app (upload, setup, calibrate, review, export) | Built. Driven end to end in a browser on a synthetic game and on the real game. |
 | Claude (vision calibration, re-reading unclear frames, captions) | Built and run live on the real game. About 25 cents for the whole job. |
 | NFL, NHL, MLB adapters | Built and unit tested against recorded league data. Never run on real footage. |
-| Docker | Files written. Not run: Docker is not installed on this machine. |
+| Hosted on Railway | Live at <https://possession-cut-production.up.railway.app>. The image built first time and passes the pipeline self-check there on every deploy. It is closed until you set a password, and no game has been run on it yet (see "Hosted on Railway"). |
+| Docker | The image builds and runs on Railway. `docker compose` on a local machine is unrun: Docker is not installed here. |
 | Hosted page talking to the local engine | Deployed on Vercel. The engine's side is tested; the browser's side is not (see Known gaps). |
 | Auto-start at login | Script written. Not run by me: it changes what starts when you log in, so that click is yours. |
 
@@ -127,8 +129,13 @@ You asked to be told afterwards.
 - **Upload was added after you saw the first version.** The PRD says files are registered
   by path and nothing is uploaded. Both now exist: the Upload box is the front door, and
   "pick it from disk" and `inbox/` remain for files already on the machine.
-- **The engine stays on your computer.** The Vercel deployment is the frontend only. See
-  "Path to a hosted version" for what running it on a server takes.
+- **There are now two ways to run it.** On your computer (the engine started by
+  `start.cmd` or the autostart, opened through the Vercel page or `127.0.0.1:8000`), and
+  on Railway, which you asked for after seeing the first. The PRD describes only the first.
+- **A password and server restrictions were added** for the hosted copy; none of that is
+  in the PRD.
+- **A self-check command** (`python -m possession_cut.selfcheck`) runs the pipeline on a
+  scripted clip. Railway runs it before each deploy.
 - **Clip ends and free throw windows follow the make**, not the score (items 2 and 3 above).
 - **Play-by-play decides free throw versus basket when matched.** You said play-by-play
   only labels and cross-checks. Timing still comes only from the bug; this is the
@@ -334,41 +341,87 @@ under 15 minutes.
   show as unreadable there; game-time start points need a clock, so they do not work for
   MLB; MLB halves must OCR for bottom-half runs to match; an NHL shootout winner has no
   play-by-play event; overtime lengths are not game-specific. NFL drive mode is not built.
-- **Docker** is unrun.
+- **No real game has been run on Railway.** I did not sign in to the hosted copy (the
+  password is yours to set), so the upload over the internet, the analysis speed on
+  Railway's processors and playback from the server are untried there. What is proven on
+  the server itself: the image builds, the app starts, and the self-check (render, find
+  the bug, cut, export) passes.
+- **On Railway an uploaded game does not survive a restart or redeploy** (see "Hosted on
+  Railway"). There is no way yet to re-attach a fresh upload to an existing job: after a
+  wipe, the game goes up again as a new job.
+- **One password, one user.** No accounts, and jobs run one at a time.
 - **Anamorphic and interlaced sources** are handled in the export graph but untested on
   real files.
 - **The time estimate is simple.** It is steady during the long stretches and jumpy in
   the first seconds of a task.
-- **Uploads have no login.** The engine listens on this computer only, which is what
-  makes that acceptable.
+- **A local engine has no login** unless `APP_PASSWORD` is set. It listens on this
+  computer only, which is what makes that acceptable.
 - **Publishing** (TikTok and the rest) is an interface only, as the PRD scopes it.
 
-## Path to a hosted version
+## Hosted on Railway
 
-What you have is a hosted page and a local engine: it works like a website on the
-computer the engine runs on. To use it from any device the engine has to live on a server.
+Project `possession-cut` in your Railway workspace, one service of the same name, built
+from the repo's `Dockerfile` on every push to `main`. Address:
+<https://possession-cut-production.up.railway.app>.
 
-Why not Vercel alone: a Vercel function cannot run ffmpeg over a 5 GB file for several
-minutes, has no disk to keep the file on, and Vercel's free file storage stops at 1 GB.
-Neon would hold the job records but that is the small part.
+**To open it, two variables are yours to set** (Railway dashboard, the service, Variables):
 
-The shortest route keeps the app as it is and moves it:
+| Variable | Value |
+| --- | --- |
+| `APP_PASSWORD` | A password you choose. This is the sign-in. Until it exists the app answers nothing. |
+| `ANTHROPIC_API_KEY` | The same key that is in `.env` here. Optional: without it the built-in detector and a template caption are used. |
 
-| Piece | What | Rough cost |
+I did not set these because they are your secrets. Railway restarts the service by
+itself when a variable changes. Everything else is already set (`HOSTED`, the folders,
+the clean-up days and `ANTHROPIC_WORKSPACE_ID`).
+
+**How it is laid out**
+
+| Where | What | Survives a redeploy |
 | --- | --- | --- |
-| Server | One machine with 4 or more cores and a 40 GB or larger disk, running the existing Docker image (API, worker, SQLite, files on the disk). Fly.io, Railway, Render or a Hetzner VPS. | 6 to 10 dollars a month |
-| Login | A password or sign-in in front of everything. Not built; required before the address is public. | none |
-| Frontend | The existing Vercel site, pointed at the server (`VITE_API_BASE`). | free tier |
-| Clean-up | Delete uploads and exports after some days so the disk does not fill. | none |
+| Volume at `/data` (5 GB, the Hobby plan's limit) | Job records, saved bug layouts, play-by-play cache, finished videos | Yes |
+| The container's own disk, `/scratch` (up to 100 GB) | Uploaded games, preview copies, export working files | No |
 
-What changes for you: each game is uploaded over your home connection, which is roughly
-20 to 70 minutes for 5 GB on typical upload speeds, against about a minute now. The upload
-screen is the same one and already resumes after a drop.
+A game is bigger than the volume, so it lives on the temporary disk. That has one
+consequence worth remembering: **a redeploy or restart wipes uploaded games.** The job
+and its clip list stay, but review playback and export need the file, so the game would
+have to be uploaded again. Since every push to `main` redeploys, finish and download a
+cut before code changes go out. On the Pro plan (50 GB volume) set
+`UPLOADS_DIR=/data/uploads` and this goes away.
 
-A larger build would put uploads in object storage, records in Neon and run the worker
-on demand. It only pays off with several users, and I would not start there.
+**What keeps the disk from filling.** Uploaded games are deleted 7 days after their job
+last changed and exports after 30 (`UPLOAD_RETENTION_DAYS`, `EXPORT_RETENTION_DAYS`).
+Before an export starts, the oldest finished exports are removed if the volume lacks
+room. Download what you want to keep.
+
+**What the password protects.** Every API route except the health check needs the
+session cookie that signing in sets (HttpOnly, 30 days, signed with a key derived from
+the password, so changing the password signs everyone out). Eight wrong guesses from one
+address lock that address out for ten minutes. On a hosted copy the page has no view of
+the server's disk: no file picker, no job from a path, no "reveal in folder".
+
+**The self-check.** `python -m possession_cut.selfcheck` renders two minutes of a
+scripted game and runs calibration, analysis and export on it, checking each against the
+script. Railway runs it before every deploy (`railway.json`), so a build with a broken
+ffmpeg, OCR model or font is refused instead of going live. It takes about two minutes
+here.
+
+**Cost.** The Hobby plan is 5 dollars a month including 5 dollars of usage, billed at
+20 dollars per processor core per month and 10 per GB of memory per month for what is
+actually used. The app idles on a fraction of a core and under 1 GB. My estimate for
+light use is 5 to 10 dollars a month; I have not measured it. Do not turn on Railway's
+"sleep when idle" setting: sleeping stops the container, which wipes uploaded games.
+
+**What changes compared with running it at home.** Uploads go over your internet
+connection: roughly 20 to 70 minutes for 5 GB on typical home upload speeds, against
+about a minute locally. Analysis speed on Railway is unknown until a game runs there.
 
 ## Vercel
+
+The Vercel site still talks to an engine on your own computer; it does not know about
+Railway. The Railway address serves the same app by itself, so Vercel is not needed for
+the hosted copy. Pointing the Vercel address at Railway is a one-line redirect, which I
+have left for you to decide once the Railway copy has run a game.
 
 The project `possession-cut-pro` deploys the frontend only, from the `frontend` directory:
 
