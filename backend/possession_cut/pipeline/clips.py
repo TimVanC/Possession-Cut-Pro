@@ -22,6 +22,8 @@ DEFAULT_OPTIONS = {
     "include_free_throws": True,
     "include_and_one_ft": True,
     "include_opponent": False,
+    # trim crowd shots and close-ups off clip edges (pipeline/camera.py; needs the video)
+    "trim_cutaways": True,
 }
 
 

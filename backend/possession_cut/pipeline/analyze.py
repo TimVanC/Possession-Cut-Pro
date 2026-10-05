@@ -22,6 +22,7 @@ from ..ai.caption import CutFacts, suggested_title
 from ..ai.claude import ClaudeClient
 from ..sports.base import PlayByPlayUnavailable, ScoringEvent, SportAdapter
 from .calibration import Calibration
+from .camera import refine_clips
 from .clips import ClipDraft, build_clips
 from .events import detect_score_events
 from .export import thumbnail
@@ -235,6 +236,16 @@ def analyze(
     clips = build_clips(tl, events, adapter, follow, spec.options, t_min=window.t_min, t_max=window.t_max)
     label_clips(clips, matches)
 
+    # -- 6b. the bug cannot see what the director shows: keep clip edges on the game camera
+    camera_stats: dict = {"skipped": "turned off"}
+    if clips and spec.options.get("trim_cutaways", True):
+        step(0.92, "camera", "Checking the camera at clip edges")
+        try:
+            camera_stats = refine_clips(probe, clips, adapter.min_clip_seconds)
+        except Exception:  # a refinement: never worth failing the analysis over
+            log.exception("camera check failed")
+            camera_stats = {"skipped": "the camera check failed; clips are untrimmed"}
+
     # -- 7. thumbnails
     step(0.94, "thumbnails", "Making thumbnails")
     thumbs = job_dir / "thumbs"
@@ -327,6 +338,7 @@ def analyze(
         "timeline": notes,
         "sampler": sampler_stats,
         "ocr_fallback": fallback,
+        "camera": camera_stats,
         "warnings": warnings,
         "claude_spent_usd": round(claude.usage.cost_usd, 4) if claude else 0.0,
     }

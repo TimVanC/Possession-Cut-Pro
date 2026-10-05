@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import struct
 import subprocess
 import sys
 from fractions import Fraction
@@ -37,6 +38,28 @@ def check(ok: bool, text: str) -> bool:
     results.append((bool(ok), text))
     print(("  PASS  " if ok else "  FAIL  ") + text)
     return bool(ok)
+
+
+
+def top_level_boxes(path: Path, limit: int = 12) -> list[str]:
+    """Names of the MP4's top-level boxes, in file order (a long game's index alone can be
+    megabytes, so this walks the box sizes instead of searching the first bytes)."""
+    names: list[str] = []
+    with path.open("rb") as f:
+        pos = 0
+        while len(names) < limit:
+            head = f.read(8)
+            if len(head) < 8:
+                break
+            size, kind = struct.unpack(">I4s", head)
+            if size == 1:
+                size = struct.unpack(">Q", f.read(8))[0]
+            names.append(kind.decode("latin1"))
+            if size == 0:
+                break
+            pos += size
+            f.seek(pos)
+    return names
 
 
 def main() -> int:
@@ -69,8 +92,9 @@ def main() -> int:
         check(150_000 <= int(a.get("bit_rate", 0)) <= 230_000, f"audio bitrate about 192 kbps ({int(a.get('bit_rate', 0)) // 1000} kbps)")
         check(abs(float(a["duration"]) - float(v["duration"])) <= 0.08,
               f"audio and video are the same length ({float(a['duration']):.3f}s vs {float(v['duration']):.3f}s)")
-    head = video.read_bytes()[:400_000]
-    check(0 < head.find(b"moov") < head.find(b"mdat"), "+faststart: the index comes before the media")
+    order = top_level_boxes(video)
+    check("moov" in order and "mdat" in order and order.index("moov") < order.index("mdat"),
+          f"+faststart: the index comes before the media ({' '.join(order)})")
 
     print("\nCanvas")
     mid = float(info["format"]["duration"]) / 2

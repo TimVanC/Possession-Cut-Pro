@@ -294,6 +294,15 @@ class SyntheticRenderer:
         by = int((0.55 + 0.2 * math.sin(t * 2.1)) * self.height)
         cv2.circle(frame, (bx, by), max(4, r // 3), (30, 110, 230), -1, cv2.LINE_AA)
 
+    def _draw_cutaway(self, frame: np.ndarray, t: float) -> None:
+        """A crowd shot with a player in close-up: no playing surface in sight."""
+        band = self._crowd[int(t * 4) % len(self._crowd)]
+        frame[:] = cv2.resize(band, (self.width, self.height), interpolation=cv2.INTER_NEAREST) // 2
+        cx = int(self.width * (0.5 + 0.03 * math.sin(t * 1.7)))
+        cv2.rectangle(frame, (cx - self.width // 7, int(self.height * 0.55)), (cx + self.width // 7, self.height),
+                      (40, 40, 40), -1)
+        cv2.circle(frame, (cx, int(self.height * 0.4)), self.height // 8, (150, 190, 225), -1, cv2.LINE_AA)
+
     def _draw_commercial(self, frame: np.ndarray, t: float) -> None:
         hue = int((t * 12) % 180)
         hsv = np.empty((1, 1, 3), dtype=np.uint8)
@@ -350,7 +359,10 @@ class SyntheticRenderer:
             cv2.putText(frame, "REPLAY", (int(40 * s), int(200 * s)), cv2.FONT_HERSHEY_DUPLEX, 1.2 * s,
                         (255, 255, 255), int(3 * s), cv2.LINE_AA)
         else:
-            self._draw_background(frame, state.source_time)
+            if state.scene == "live" and self.script.in_cutaway(t):
+                self._draw_cutaway(frame, t)
+            else:
+                self._draw_background(frame, state.source_time)
             self._draw_bug(frame, state)
             if state.scene == "replay_bug":
                 cv2.putText(frame, "REPLAY", (int(40 * s), int(200 * s)), cv2.FONT_HERSHEY_DUPLEX, 1.2 * s,

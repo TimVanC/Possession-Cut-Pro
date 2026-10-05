@@ -33,6 +33,7 @@ export interface JobOptions {
   include_free_throws?: boolean;
   include_and_one_ft?: boolean;
   include_opponent?: boolean;
+  trim_cutaways?: boolean;
   [key: string]: unknown;
 }
 

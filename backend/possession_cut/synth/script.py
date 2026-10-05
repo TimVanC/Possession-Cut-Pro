@@ -181,6 +181,9 @@ class GameScript:
     events: list[ScoreEvent]
     possession_starts: list[tuple[float, str, str]]
     make_times: list[float] = field(default_factory=list)
+    # Stretches where the director shows a crowd shot or a close-up while the bug stays
+    # on and the game goes on: live as far as the bug can tell, but not the game camera.
+    cutaways: list[tuple[float, float]] = field(default_factory=list)
 
     # -- what the bug shows --------------------------------------------
     def _base_state(self, t: float) -> BugState:
@@ -219,6 +222,9 @@ class GameScript:
                 state.scene = "replay_bug"
                 return state
         return self._base_state(t)
+
+    def in_cutaway(self, t: float) -> bool:
+        return any(a <= t < b for a, b in self.cutaways)
 
     def not_live_intervals(self) -> list[tuple[float, float]]:
         spans = [(a, b) for a, b, _ in self.hidden] + [(a, b) for a, b, _ in self.replays]
@@ -377,6 +383,7 @@ class GameScript:
                 "replay_bug": [[round(a, 3), round(b, 3), round(s, 3)] for a, b, s in self.replays],
                 "not_live": [[round(a, 3), round(b, 3)] for a, b in self.not_live_intervals()],
                 "score_animation": [[round(a, 3), round(b, 3), team] for a, b, team in self.anims],
+                "cutaway": [[round(a, 3), round(b, 3)] for a, b in self.cutaways],
             },
             "possession_starts": [
                 {"t": round(t, 3), "team": team, "cause": cause} for t, team, cause in self.possession_starts
@@ -457,6 +464,7 @@ class ScriptBuilder:
         self.events: list[ScoreEvent] = []
         self.possession_starts: list[tuple[float, str, str]] = []
         self.make_times: list[float] = []
+        self.cutaways: list[tuple[float, float]] = []
         self._trip = 0
         self.last_commercial_end = 0.0
 
@@ -608,6 +616,9 @@ class ScriptBuilder:
         else:  # pragma: no cover
             raise ScriptError(f"unknown situation {self.situation}")
         self.possession_starts.append((start, team, cause))
+        if kw.get("cutaway_lead"):
+            # the director is still on a crowd shot when play resumes (it began a moment earlier)
+            self.cutaways.append((max(0.0, start - 1.5), start + kw["cutaway_lead"]))
 
         # 2. it runs
         if outcome == "buzzer":
@@ -630,6 +641,10 @@ class ScriptBuilder:
                 start_observable=observable,
             )
             self._set_shot(24.0, False)
+            if kw.get("closeup_after"):
+                # a close-up of the scorer, this long after the ball drops
+                delay, length = kw["closeup_after"]
+                self.cutaways.append((ev.make_time + delay, ev.make_time + delay + length))
             if outcome.startswith("and1"):
                 self._set_clock(False)
                 walk = kw.get("walk", self._u(14.0, 19.0))
@@ -742,6 +757,7 @@ class ScriptBuilder:
             events=self.events,
             possession_starts=self.possession_starts,
             make_times=self.make_times,
+            cutaways=sorted(self.cutaways),
         )
 
 

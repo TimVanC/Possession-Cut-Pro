@@ -41,6 +41,7 @@ export default function NewJob() {
   const [freeThrows, setFreeThrows] = useState(true);
   const [andOne, setAndOne] = useState(true);
   const [opponent, setOpponent] = useState(false);
+  const [gameCamera, setGameCamera] = useState(true);
   const [loaded, setLoaded] = useState(false);
 
   // editing an existing job (an inbox draft, or changing options before re-analysis)
@@ -70,6 +71,7 @@ export default function NewJob() {
     setFreeThrows(job.options.include_free_throws ?? true);
     setAndOne(job.options.include_and_one_ft ?? true);
     setOpponent(job.options.include_opponent ?? false);
+    setGameCamera(job.options.trim_cutaways ?? true);
   }, [existing.data, loaded]);
 
   const sportInfo = sports.data?.find((s) => s.key === sport);
@@ -123,7 +125,12 @@ export default function NewJob() {
       team,
       start_spec,
       end_spec,
-      options: { include_free_throws: freeThrows, include_and_one_ft: andOne, include_opponent: opponent },
+      options: {
+        include_free_throws: freeThrows,
+        include_and_one_ft: andOne,
+        include_opponent: opponent,
+        trim_cutaways: gameCamera,
+      },
     };
   };
 
@@ -350,9 +357,10 @@ export default function NewJob() {
 
         <div>
           <span className="label">Include</span>
-          <Toggle checked={freeThrows} onChange={setFreeThrows} label="Free throws" hint="Trimmed tight: three seconds before to one second after each make." />
+          <Toggle checked={freeThrows} onChange={setFreeThrows} label="Free throws" hint="Trimmed tight around each make." />
           <Toggle checked={andOne} onChange={setAndOne} label="And-one free throw" hint="Tacked onto its basket as a short trailing segment." />
           <Toggle checked={opponent} onChange={setOpponent} label="Opponent scores" hint="Both teams' scoring possessions, in game order." />
+          <Toggle checked={gameCamera} onChange={setGameCamera} label="Game camera only" hint="Trims crowd shots and close-ups off the start and end of each clip." />
         </div>
       </section>
 
