@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type JobSetup } from "../api";
 import { FileBrowser, Note, Spinner, Toggle } from "../components";
+import { UploadBox } from "../Upload";
 import { formatBytes, formatClock, formatDuration, parseClock, periodLabel } from "../lib";
 import type { Game, StartSpec } from "../types";
 
@@ -157,7 +158,7 @@ export default function NewJob() {
   return (
     <main className="mx-auto max-w-3xl">
       <h1 className="text-xl font-semibold">{jobId === null ? "New job" : "Game setup"}</h1>
-      <p className="mt-1 text-ink-400">Point at a game file, say which game and team, and choose where the cut starts.</p>
+      <p className="mt-1 text-ink-400">Upload the game, say which game and team, and choose where the cut starts.</p>
 
       {/* source */}
       <section className="panel mt-5 p-5">
@@ -166,7 +167,7 @@ export default function NewJob() {
           <div className="flex items-center gap-3">
             <div className="min-w-0 flex-1">
               <div className="truncate font-medium">{fileName}</div>
-              <div className="num truncate text-xs text-ink-400">{sourcePath}</div>
+              <div className="num truncate text-xs text-ink-400">{existing.data?.uploaded ? "Uploaded" : sourcePath}</div>
               {existing.data?.probe && (
                 <div className="num mt-0.5 text-xs text-ink-400">
                   {formatDuration(existing.data.probe.duration)} · {existing.data.probe.display_width}×{existing.data.probe.height} ·{" "}
@@ -181,11 +182,8 @@ export default function NewJob() {
             )}
           </div>
         ) : (
-          <button className="btn btn-primary" onClick={() => setBrowsing(true)}>
-            Browse for a file
-          </button>
+          <UploadBox compact onBrowse={() => setBrowsing(true)} />
         )}
-        <p className="mt-2 text-xs text-ink-400">MP4, MKV or TS, 480p or better. The file is read where it is; nothing is uploaded or copied.</p>
       </section>
 
       {/* game */}

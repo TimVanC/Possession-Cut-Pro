@@ -13,12 +13,29 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 2000 } },
 });
 
-/** Shown when no engine answers: the app runs on your machine, this page is only its face. */
+/** Shown when no engine answers: the page is the screen, the engine on this computer does the work. */
 function ConnectEngine({ onConnected }: { onConnected: (h: Health) => void }) {
   const [address, setAddress] = useState(savedEngine() || "http://127.0.0.1:8000");
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const hosted = !["localhost", "127.0.0.1"].includes(window.location.hostname);
+
+  // keep looking: the moment the engine is started, the page opens without a click
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const look = async () => {
+      const health = await connectEngine();
+      if (stopped) return;
+      if (health) onConnected(health);
+      else timer = setTimeout(look, 3000);
+    };
+    timer = setTimeout(look, 3000);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [onConnected]);
 
   const attempt = async () => {
     setBusy(true);
@@ -29,45 +46,58 @@ function ConnectEngine({ onConnected }: { onConnected: (h: Health) => void }) {
     else setFailed(true);
   };
 
+  const code = "rounded bg-ink-800 px-1.5 py-0.5 text-ink-100";
   return (
     <main className="mx-auto flex min-h-full max-w-xl flex-col justify-center px-6 py-16">
       <h1 className="text-2xl font-semibold">
         Possession <span className="text-court">Cut</span>
       </h1>
-      <p className="mt-3 text-ink-300">
-        The engine is not running, or this page cannot reach it. Possession Cut does its work on your own computer: it
-        reads game files from your disk and never uploads them.
+      <p className="mt-4 text-lg font-medium">Start the engine to begin</p>
+      <p className="mt-1 text-ink-300">
+        This page is the screen. The video work is done by the Possession Cut engine on this computer, and it is not
+        running yet.
       </p>
       <ol className="mt-5 list-decimal space-y-2 pl-5 text-ink-300">
         <li>
-          In the project folder run <code className="rounded bg-ink-800 px-1.5 py-0.5">dev.cmd</code> on Windows or{" "}
-          <code className="rounded bg-ink-800 px-1.5 py-0.5">./dev.sh</code> on Mac.
+          Open the Possession Cut folder and double-click <code className={code}>start.cmd</code> (on a Mac, run{" "}
+          <code className={code}>./dev.sh</code>).
         </li>
-        <li>Wait for “Possession Cut is starting”, then connect.</li>
-        {hosted && (
-          <li>
-            Because this page is hosted at <b>{window.location.origin}</b>, add that address to{" "}
-            <code className="rounded bg-ink-800 px-1.5 py-0.5">CORS_ORIGINS</code> in <code>.env</code> and restart the
-            engine. Chrome will ask once for permission to reach your local network.
-          </li>
-        )}
+        <li>Leave it running. This page connects by itself and you can upload your game.</li>
       </ol>
-      <label className="label mt-6" htmlFor="engine">
-        Engine address
-      </label>
-      <div className="flex gap-2">
-        <input id="engine" className="field" value={address} onChange={(e) => setAddress(e.target.value)} />
-        <button className="btn btn-primary" onClick={attempt} disabled={busy}>
-          {busy ? <Spinner /> : "Connect"}
-        </button>
+      <p className="mt-4 text-[13px] text-ink-400">
+        To skip this step for good, double-click <code className={code}>install-autostart.cmd</code> once. The engine
+        then starts quietly every time you log in.
+      </p>
+      <div className="mt-6 flex items-center gap-3 text-[13px] text-ink-300" role="status">
+        <Spinner /> Looking for the engine
       </div>
-      {failed && (
-        <div className="mt-4">
-          <Note tone="error">
-            No answer from {address}. Check that the engine is running{hosted ? " and that CORS_ORIGINS includes this site" : ""}.
-          </Note>
+
+      <details className="mt-8 text-[13px] text-ink-400">
+        <summary className="cursor-pointer hover:text-ink-100">Connection settings</summary>
+        <label className="label mt-4" htmlFor="engine">
+          Engine address
+        </label>
+        <div className="flex gap-2">
+          <input id="engine" className="field" value={address} onChange={(e) => setAddress(e.target.value)} />
+          <button className="btn btn-primary" onClick={attempt} disabled={busy}>
+            {busy ? <Spinner /> : "Connect"}
+          </button>
         </div>
-      )}
+        {hosted && (
+          <p className="mt-3">
+            This page is hosted at <b className="text-ink-300">{window.location.origin}</b>. The engine only answers
+            sites listed under <code className={code}>CORS_ORIGINS</code> in its <code>.env</code> file, and Chrome asks
+            once for permission to reach your local network.
+          </p>
+        )}
+        {failed && (
+          <div className="mt-3">
+            <Note tone="error">
+              No answer from {address}. Check that the engine is running{hosted ? " and that CORS_ORIGINS includes this site" : ""}.
+            </Note>
+          </div>
+        )}
+      </details>
     </main>
   );
 }
@@ -78,7 +108,7 @@ function Banner({ health }: { health: Health }) {
   const notes: { tone: "warn" | "error"; text: string }[] = [];
   if (!h.ffmpeg) notes.push({ tone: "error", text: "ffmpeg was not found. Install ffmpeg 6+ and restart." });
   if (!h.worker)
-    notes.push({ tone: "warn", text: "The worker is not running, so queued jobs will wait. Start everything with dev.cmd or ./dev.sh." });
+    notes.push({ tone: "warn", text: "The worker is not running, so queued jobs will wait. Start everything with start.cmd or ./dev.sh." });
   if (!h.claude.configured)
     notes.push({
       tone: "warn",

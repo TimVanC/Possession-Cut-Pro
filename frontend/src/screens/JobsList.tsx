@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, url } from "../api";
 import { Note, ProgressBar, Spinner, StatusBadge } from "../components";
+import { UploadBox } from "../Upload";
 import { formatBytes, formatDate, formatDuration, gameTitle, jobRoute } from "../lib";
 import type { Job } from "../types";
 
@@ -29,6 +30,7 @@ function JobCard({ job }: { job: Job }) {
             </button>
             <StatusBadge status={job.status} />
             {job.from_inbox && <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[11px] text-ink-300">inbox</span>}
+            {job.uploaded && <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[11px] text-ink-300">uploaded</span>}
           </div>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[13px] text-ink-300">
             <span>{gameTitle(job)}</span>
@@ -59,7 +61,9 @@ function JobCard({ job }: { job: Job }) {
           )}
           {!job.source_exists && (
             <div className="mt-2">
-              <Note tone="warn">The source file is no longer at {job.source_path}.</Note>
+              <Note tone="warn">
+                {job.uploaded ? "The uploaded game file is gone. Upload it again to keep working on this game." : `The source file is no longer at ${job.source_path}.`}
+              </Note>
             </div>
           )}
         </div>
@@ -80,7 +84,7 @@ function JobCard({ job }: { job: Job }) {
                 </button>
               </>
             ) : (
-              <button className="btn btn-sm btn-ghost text-ink-400" onClick={() => setConfirming(true)} title="Deletes the job and its analysis. The game file and exports stay.">
+              <button className="btn btn-sm btn-ghost text-ink-400" onClick={() => setConfirming(true)} title={job.uploaded ? "Deletes the job, its analysis and the uploaded game file. Exports stay." : "Deletes the job and its analysis. The game file and exports stay."}>
                 Delete
               </button>
             )}
@@ -136,10 +140,12 @@ export default function JobsList() {
     refetchInterval: (query) => (query.state.data?.some((j) => j.busy) ? 1500 : 6000),
   });
   const inbox = useQuery({ queryKey: ["inbox"], queryFn: api.inbox, refetchInterval: 10000 });
+  const navigate = useNavigate();
+  const empty = jobs.data?.length === 0;
   return (
     <main>
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold">Jobs</h1>
+        <h1 className="text-xl font-semibold">{empty ? "Make your first cut" : "Jobs"}</h1>
         {inbox.data && inbox.data.waiting > 0 && (
           <span
             className="rounded-full bg-court/15 px-2.5 py-0.5 text-xs font-semibold text-court"
@@ -148,31 +154,21 @@ export default function JobsList() {
             Inbox · {inbox.data.waiting}
           </span>
         )}
-        <Link to="/new" className="btn btn-primary ml-auto">
-          New job
-        </Link>
       </div>
-      {inbox.data && (
-        <p className="mt-1 text-[13px] text-ink-400">
-          Drop a game file in <span className="num text-ink-300">{inbox.data.dir}</span> and it shows up here as a draft.
+      {empty && (
+        <p className="mt-1 max-w-2xl text-ink-400">
+          Upload a full game broadcast. The app reads the score bug, finds every scoring possession for your team, and
+          cuts a vertical video with the dead time removed.
         </p>
       )}
 
       <div className="mt-5">
+        <UploadBox compact={!empty} onBrowse={() => navigate("/new")} />
+      </div>
+
+      <div className="mt-6">
         {jobs.isLoading && <Spinner />}
         {jobs.error && <Note tone="error">{(jobs.error as Error).message}</Note>}
-        {jobs.data && jobs.data.length === 0 && (
-          <div className="panel px-6 py-12 text-center">
-            <p className="text-base font-medium">No jobs yet</p>
-            <p className="mx-auto mt-1 max-w-md text-ink-400">
-              Pick a full game broadcast from your disk. The app reads the score bug, finds every scoring possession for
-              your team, and cuts a vertical video with the dead time removed.
-            </p>
-            <Link to="/new" className="btn btn-primary mt-5">
-              Start the first job
-            </Link>
-          </div>
-        )}
         <ul className="space-y-3">{jobs.data?.map((job) => <JobCard key={job.id} job={job} />)}</ul>
       </div>
       <Templates />

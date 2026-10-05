@@ -21,6 +21,7 @@ from .. import __version__
 from ..config import REPO_ROOT, get_settings
 from ..db import get_engine
 from .routes import router
+from .uploads import router as uploads_router
 
 log = logging.getLogger(__name__)
 DIST = REPO_ROOT / "frontend" / "dist"
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        max_age=3600,
         expose_headers=["Content-Range", "Accept-Ranges", "Content-Length"],
     )
 
@@ -55,6 +57,7 @@ def create_app() -> FastAPI:
         return response
 
     app.include_router(router)
+    app.include_router(uploads_router)
 
     @app.exception_handler(Exception)
     async def unhandled(_request: Request, exc: Exception):  # pragma: no cover - last resort

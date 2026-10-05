@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,9 @@ class Settings(BaseSettings):
     inbox_dir: str = "inbox"
     data_dir: str = "data"
     exports_dir: str = "exports"
+    # Where files uploaded through the page are kept. Empty = data/uploads, or the
+    # computer's local app-data folder when data/ sits inside a cloud-synced folder.
+    uploads_dir: str = ""
 
     api_host: str = "127.0.0.1"
     api_port: int = 8000
@@ -60,6 +64,15 @@ class Settings(BaseSettings):
         return self._resolve(self.exports_dir)
 
     @property
+    def uploads_path(self) -> Path:
+        if self.uploads_dir:
+            return self._resolve(self.uploads_dir)
+        if _is_synced(self.data_path):
+            # a multi-gigabyte game file must not be pushed to OneDrive or Dropbox
+            return _local_app_dir() / "uploads"
+        return self.data_path / "uploads"
+
+    @property
     def jobs_path(self) -> Path:
         return self.data_path / "jobs"
 
@@ -82,7 +95,7 @@ class Settings(BaseSettings):
         roots = [Path(r).expanduser().resolve() for r in raw if r]
         if not roots:
             roots = [Path.home().resolve()]
-        for extra in (self.inbox_path, self.exports_path):
+        for extra in (self.inbox_path, self.exports_path, self.uploads_path):
             extra = extra.resolve()
             if not any(_is_within(extra, r) for r in roots):
                 roots.append(extra)
@@ -111,6 +124,7 @@ class Settings(BaseSettings):
             self.templates_path,
             self.cache_path,
             self.exports_path,
+            self.uploads_path,
         ):
             p.mkdir(parents=True, exist_ok=True)
 
@@ -118,6 +132,24 @@ class Settings(BaseSettings):
         p = self.jobs_path / str(job_id)
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+
+SYNCED_FOLDERS = ("onedrive", "dropbox", "google drive", "googledrive", "icloud drive", "mobile documents")
+
+
+def _is_synced(path: Path) -> bool:
+    """Does this path sit inside a folder a cloud client keeps in sync?"""
+    return any(part.lower().startswith(SYNCED_FOLDERS) for part in path.resolve().parts)
+
+
+def _local_app_dir() -> Path:
+    """A per-user folder on this machine that no sync client touches."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(base) / "PossessionCut"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "PossessionCut"
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "possession-cut"
 
 
 def _is_within(path: Path, root: Path) -> bool:

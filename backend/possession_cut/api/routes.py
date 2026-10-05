@@ -39,6 +39,7 @@ from ..pipeline.window import biggest_run_start
 from ..sports import PlayByPlayUnavailable, available_sports, get_adapter
 from ..worker.inbox import VIDEO_EXTENSIONS, is_video
 from ..worker.runner import job_dir, load_calibration, save_calibration
+from .uploads import is_upload
 
 router = APIRouter(prefix="/api")
 
@@ -84,6 +85,7 @@ def job_out(job: Job) -> dict[str, Any]:
         "options": job.options or {},
         "template_id": job.template_id,
         "from_inbox": job.from_inbox,
+        "uploaded": is_upload(job.source_path),
         "probe": {k: probe.get(k) for k in ("duration", "width", "height", "display_width", "fps", "video_codec",
                                               "audio_codec", "size_bytes", "browser_playable", "container")} if probe else None,
         "calibration": {k: cal.get(k) for k in ("confidence", "source", "confirmed", "template_name", "teams",
@@ -172,6 +174,7 @@ def health() -> dict:
         },
         "sample_fps": settings.ocr_sample_fps,
         "inbox_dir": str(settings.inbox_path),
+        "uploads_dir": str(settings.uploads_path),
         "exports_dir": str(settings.exports_path),
     }
 
@@ -402,11 +405,18 @@ def update_job(job_id: int, body: JobUpdate) -> dict:
 
 @router.delete("/jobs/{job_id}")
 def delete_job(job_id: int) -> dict:
-    """Removes the job record and its artifacts. Never touches the source file or exports."""
+    """Removes the job record and its artifacts. Exports stay, and so does a source file
+    the user pointed at on their own disk. A file the app received by upload is the app's
+    own copy and goes with the job, unless another job still uses it."""
+    uploaded_copy: Path | None = None
     with session_scope() as s:
         job = _job_or_404(s, job_id)
         if job.task is not None and job.task_started_at is not None:
             raise HTTPException(409, "This job is running. Cancel it first.")
+        if is_upload(job.source_path):
+            shared = s.exec(select(Job).where(Job.source_path == job.source_path, Job.id != job_id)).first()
+            if shared is None:
+                uploaded_copy = Path(job.source_path)
         for clip in s.exec(select(Clip).where(Clip.job_id == job_id)).all():
             s.delete(clip)
         for export in s.exec(select(Export).where(Export.job_id == job_id)).all():
@@ -414,6 +424,8 @@ def delete_job(job_id: int) -> dict:
         s.delete(job)
     folder = get_settings().jobs_path / str(job_id)
     shutil.rmtree(folder, ignore_errors=True)
+    if uploaded_copy is not None:
+        uploaded_copy.unlink(missing_ok=True)
     return {"deleted": job_id}
 
 

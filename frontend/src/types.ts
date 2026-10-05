@@ -87,6 +87,7 @@ export interface Job {
   options: JobOptions;
   template_id: number | null;
   from_inbox: boolean;
+  uploaded: boolean;
   probe: {
     duration: number;
     width: number;
@@ -224,6 +225,7 @@ export interface Health {
   };
   sample_fps: number;
   inbox_dir: string;
+  uploads_dir: string;
   exports_dir: string;
 }
 

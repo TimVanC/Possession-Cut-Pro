@@ -140,6 +140,8 @@ def settings(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("INBOX_DIR", str(tmp_path / "inbox"))
     monkeypatch.setenv("EXPORTS_DIR", str(tmp_path / "exports"))
+    monkeypatch.setenv("UPLOADS_DIR", str(tmp_path / "data" / "uploads"))
+    monkeypatch.setenv("CORS_ORIGINS", "")
     monkeypatch.setenv("ALLOWED_ROOTS", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
     monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "")

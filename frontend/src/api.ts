@@ -124,6 +124,108 @@ const qs = (params: Record<string, string | number | undefined | null>): string 
   return s ? `?${s}` : "";
 };
 
+export interface UploadProgress {
+  sent: number;
+  total: number;
+  bytesPerSecond: number;
+}
+
+interface UploadStatus {
+  id: string;
+  size: number;
+  received: number;
+  chunk_size: number;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Send a game file to the engine in pieces and get back the draft job made for it.
+ *
+ * A piece that fails is retried from wherever the engine says the file really ends, so
+ * a blip in the connection costs seconds, not the whole upload.
+ */
+export async function uploadFile(
+  file: File,
+  onProgress: (p: UploadProgress) => void,
+  signal?: AbortSignal,
+): Promise<Job> {
+  const started = await request<UploadStatus>("/api/uploads", json({ name: file.name, size: file.size }));
+  const path = `/api/uploads/${started.id}`;
+  const cancelled = () => new DOMException("Upload cancelled", "AbortError");
+  const giveUp = async () => {
+    try {
+      await fetch(url(path), { method: "DELETE" });
+    } catch {
+      /* the engine drops unfinished uploads after a day anyway */
+    }
+  };
+
+  let offset = started.received;
+  let failures = 0;
+  let speed = 0;
+  let markTime = performance.now();
+  let markSent = offset;
+  while (offset < file.size) {
+    if (signal?.aborted) {
+      await giveUp();
+      throw cancelled();
+    }
+    const piece = file.slice(offset, Math.min(file.size, offset + started.chunk_size));
+    try {
+      const res = await fetch(url(`${path}?offset=${offset}`), {
+        method: "PUT",
+        body: piece,
+        headers: { "Content-Type": "application/octet-stream" },
+        signal,
+      });
+      if (res.status === 409) {
+        offset = (await res.json()).detail.received;
+        continue;
+      }
+      if (!res.ok) {
+        let detail = res.statusText;
+        try {
+          const body = await res.json();
+          detail = typeof body.detail === "string" ? body.detail : detail;
+        } catch {
+          /* not json */
+        }
+        throw new ApiError(res.status, detail);
+      }
+      offset = (await res.json()).received;
+      failures = 0;
+    } catch (err) {
+      if (signal?.aborted) {
+        await giveUp();
+        throw cancelled();
+      }
+      // the engine said no (wrong kind of file, upload gone): retrying will not help
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) throw err;
+      failures += 1;
+      if (failures > 6) throw new ApiError(0, "The upload kept failing. Check that the engine is still running, then try again.");
+      await sleep(Math.min(8000, 500 * 2 ** failures));
+      try {
+        offset = (await request<UploadStatus>(path)).received;
+      } catch {
+        /* still unreachable: the next attempt will find out */
+      }
+      continue;
+    }
+    const now = performance.now();
+    const elapsed = (now - markTime) / 1000;
+    if (elapsed >= 0.25) {
+      const latest = (offset - markSent) / elapsed;
+      speed = speed ? speed * 0.7 + latest * 0.3 : latest;
+      markTime = now;
+      markSent = offset;
+    }
+    onProgress({ sent: offset, total: file.size, bytesPerSecond: speed });
+  }
+  onProgress({ sent: file.size, total: file.size, bytesPerSecond: speed });
+  return request<Job>(`${path}/complete`, { method: "POST" });
+}
+
 export interface JobSetup {
   source_path?: string;
   sport: string;

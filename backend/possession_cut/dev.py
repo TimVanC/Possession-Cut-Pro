@@ -1,7 +1,9 @@
 """Start the API, the worker and the frontend together. Ctrl+C stops all three.
 
-    python -m possession_cut.dev            # dev servers (Vite on :5173, API on :8000)
-    python -m possession_cut.dev --no-frontend
+    python -m possession_cut.dev                 # dev servers (Vite on :5173, API on :8000)
+    python -m possession_cut.dev --no-frontend   # the engine alone: API and worker
+    python -m possession_cut.dev --no-frontend --background   # same, logging to data/engine.log
+    python -m possession_cut.dev --stop          # stop a copy started with --background
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import argparse
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -68,11 +71,38 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         pass
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _stop_background(pid_file) -> int:
+    """Stop the copy that wrote ``pid_file`` (started with --background)."""
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (OSError, ValueError):
+        print("No background engine is recorded as running.")
+        return 0
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    pid_file.unlink(missing_ok=True)
+    print("Possession Cut engine stopped.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-frontend", action="store_true", help="skip the Vite dev server")
     parser.add_argument("--no-worker", action="store_true", help="skip the worker process")
     parser.add_argument("--reload", action="store_true", help="uvicorn auto-reload")
+    parser.add_argument("--background", action="store_true", help="log to data/engine.log instead of the console")
+    parser.add_argument("--stop", action="store_true", help="stop a copy started with --background")
     args = parser.parse_args()
 
     # Child processes print characters a Windows console code page cannot encode
@@ -85,6 +115,19 @@ def main() -> int:
 
     settings = get_settings()
     settings.ensure_dirs()
+    pid_file = settings.data_path / "engine.pid"
+    if args.stop:
+        return _stop_background(pid_file)
+    if _port_in_use(settings.api_host, settings.api_port):
+        # started twice (a login item and a double-click): the first copy is the engine
+        print(f"Possession Cut is already running on http://{settings.api_host}:{settings.api_port}.")
+        return 0
+    if args.background:
+        log_path = settings.data_path / "engine.log"
+        if log_path.exists() and log_path.stat().st_size > 5_000_000:
+            log_path.unlink()
+        sys.stdout = sys.stderr = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
+        pid_file.write_text(str(os.getpid()))
     try:
         ffmpeg_bin()
     except FileNotFoundError as exc:
@@ -124,6 +167,9 @@ def main() -> int:
         else:
             print("NOTE: npm or frontend/ not found; serving the built frontend from the API if present.")
 
+    hosted = [o for o in settings.allowed_origins if o.startswith("https://")]
+    if args.no_frontend and hosted:
+        web_url = hosted[0]
     print(f"\n  Possession Cut is starting. Open {web_url}\n  Press Ctrl+C to stop.\n", flush=True)
 
     code = 0
@@ -141,6 +187,8 @@ def main() -> int:
     finally:
         for proc in procs.values():
             _kill_tree(proc)
+        if args.background:
+            pid_file.unlink(missing_ok=True)
     return code
 
 
