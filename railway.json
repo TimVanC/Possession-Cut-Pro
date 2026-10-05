@@ -5,6 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
+    "preDeployCommand": ["python -m possession_cut.selfcheck"],
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 180,
     "restartPolicyType": "ON_FAILURE",

@@ -97,19 +97,51 @@ Without `make` (Windows): `cd backend` then `..\.venv\Scripts\python -m pytest`.
 | `python tools/verify_export.py exports/<file>.mp4` | checks an export against the output rules (ffprobe, canvas, crop). Add `--truth <game>.truth.json` for a frame-by-frame check on a synthetic game, or `--calibration data/jobs/<id>/calibration.json` for real footage |
 | `python tools/benchmark_analysis.py --minutes 150 --height 1080` | times the analysis stage on a long file |
 
-## Hosted page
+## Hosted on a server (Railway)
 
-The frontend can be deployed on its own as a static site (`frontend/vercel.json` is set up
-for Vercel with `frontend` as the root directory). The page is only the screen: it talks to
-the engine running on your computer, and uploads go to that engine, not to the internet.
+The whole app (page, API, worker, ffmpeg) runs as one container from the `Dockerfile`, so
+it works from any device with nothing installed. `railway.json` tells Railway how to
+build and health-check it.
+
+Set these variables on the service:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `APP_PASSWORD` | a password you choose | The sign-in for the app. Without it a hosted copy serves nothing. |
+| `ANTHROPIC_API_KEY` | your key (optional) | Claude calibration, re-reads and captions. |
+| `ANTHROPIC_WORKSPACE_ID` | your workspace ID | Only if the key is not tied to a workspace. |
+| `HOSTED` | `1` | Sign-in required, uploads only, no view of the server's disk. |
+| `DATA_DIR` | `/data` | Job records and saved layouts, on the persistent volume. |
+| `EXPORTS_DIR` | `/data/exports` | Finished videos, on the volume. |
+| `UPLOADS_DIR` | `/scratch/uploads` | Uploaded games, on the temporary disk. |
+| `SCRATCH_DIR` | `/scratch/work` | Big temporary files. |
+| `INBOX_DIR` | `/scratch/inbox` | Unused on a server; kept off the volume. |
+| `UPLOAD_RETENTION_DAYS` | `7` | An uploaded game is deleted this long after its job last changed. |
+| `EXPORT_RETENTION_DAYS` | `30` | A finished video is deleted after this long. |
+
+Attach a volume at `/data` and give the service a public domain.
+
+What to know:
+
+- **Uploaded games sit on the temporary disk**, because a small plan's volume (5 GB) is
+  smaller than one game. A redeploy or restart wipes that disk: the job stays, but the
+  game has to be uploaded again to keep working on it. Finish and download a cut before
+  pushing new code. A plan with a bigger volume can point `UPLOADS_DIR` at `/data/uploads`.
+- **Old exports are removed to make room** when the volume is nearly full. Download the
+  ones you want to keep.
+- Every push to the connected branch redeploys.
+
+## Hosted page with a local engine
+
+The frontend can also be deployed on its own as a static site (`frontend/vercel.json` is
+set up for Vercel with `frontend` as the root directory) and talk to the engine running on
+your computer. Uploads then go to that engine, not to the internet.
 
 1. Add the site's address to `.env`: `CORS_ORIGINS=https://your-app.vercel.app`.
 2. Start the engine (`start.cmd`, or install the autostart).
 3. Open the site in Chrome or Edge. It finds the engine at `http://127.0.0.1:8000` by itself; Chrome asks once for permission to reach your local network.
 
-This works on the computer the engine runs on. To use the app from other devices the
-engine has to run on a server instead; see "Path to a hosted version" in
-[BUILD_NOTES.md](BUILD_NOTES.md).
+This works only on the computer the engine runs on.
 
 ## Docker
 
