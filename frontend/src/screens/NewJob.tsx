@@ -27,7 +27,8 @@ export default function NewJob() {
   const hosted = useHosted();
   const [browsing, setBrowsing] = useState(false);
   const [sourcePath, setSourcePath] = useState("");
-  const [sport, setSport] = useState("nba");
+  // no sport until one is chosen: the team list below belongs to a sport
+  const [sport, setSport] = useState("");
   const [date, setDate] = useState("");
   const [teamFilter, setTeamFilter] = useState("");
   const [searched, setSearched] = useState<{ sport: string; date: string; team: string } | null>(null);
@@ -51,7 +52,9 @@ export default function NewJob() {
     if (!job || loaded) return;
     setLoaded(true);
     setSourcePath(job.source_path);
-    setSport(job.sport);
+    // a file that was only just uploaded has had no sport chosen for it yet
+    const untouched = job.status === "draft" && !job.game_id && !job.team && !job.calibration;
+    setSport(untouched ? "" : job.sport);
     if (job.game?.game_id) {
       setGame(job.game as Game);
       setDate(job.game.date ?? "");
@@ -199,7 +202,18 @@ export default function NewJob() {
         <div className="grid grid-cols-[150px_1fr_1fr_auto] items-end gap-3">
           <div>
             <label className="label" htmlFor="sport">Sport</label>
-            <select id="sport" className="field" value={sport} onChange={(e) => { setSport(e.target.value); setGame(null); setSearched(null); }}>
+            <select
+              id="sport"
+              className="field"
+              value={sport}
+              onChange={(e) => {
+                setSport(e.target.value);
+                setTeamFilter("");
+                setGame(null);
+                setSearched(null);
+              }}
+            >
+              <option value="">Choose a sport</option>
               {(sports.data ?? [{ key: "nba", name: "NBA" }]).map((s) => (
                 <option key={s.key} value={s.key}>{s.name}</option>
               ))}
@@ -211,14 +225,22 @@ export default function NewJob() {
           </div>
           <div>
             <label className="label" htmlFor="teamfilter">Team (optional)</label>
-            <select id="teamfilter" className="field" value={teamFilter} onChange={(e) => setTeamFilter(e.target.value)}>
-              <option value="">Any team</option>
-              {sportInfo?.teams.map((t) => (
-                <option key={t.abbr} value={t.abbr}>{t.name}</option>
-              ))}
+            <select
+              id="teamfilter"
+              className="field"
+              value={teamFilter}
+              disabled={!sport}
+              title={sport ? undefined : "Choose a sport to see its teams"}
+              onChange={(e) => setTeamFilter(e.target.value)}
+            >
+              <option value="">{sport ? "Any team" : ""}</option>
+              {sport &&
+                sportInfo?.teams.map((t) => (
+                  <option key={t.abbr} value={t.abbr}>{t.name}</option>
+                ))}
             </select>
           </div>
-          <button className="btn" disabled={!date} onClick={() => setSearched({ sport, date, team: teamFilter })}>
+          <button className="btn" disabled={!date || !sport} onClick={() => setSearched({ sport, date, team: teamFilter })}>
             Find games
           </button>
         </div>
@@ -372,7 +394,8 @@ export default function NewJob() {
       )}
       <div className="mt-5 flex items-center justify-end gap-3">
         <button className="btn" onClick={() => navigate("/")}>Cancel</button>
-        <button className="btn btn-primary" disabled={!sourcePath || clockErrors || submit.isPending} onClick={() => submit.mutate()}>
+        {sourcePath && !sport && <span className="text-[13px] text-ink-400">Choose a sport to continue.</span>}
+        <button className="btn btn-primary" disabled={!sourcePath || !sport || clockErrors || submit.isPending} onClick={() => submit.mutate()}>
           {submit.isPending ? <Spinner /> : jobId === null ? "Create job and find the score bug" : calibrated ? "Save and re-analyze" : "Save and find the score bug"}
         </button>
       </div>
