@@ -361,7 +361,7 @@ under 15 minutes.
 ## Hosted on Railway
 
 Project `possession-cut` in your Railway workspace, one service of the same name, built
-from the repo's `Dockerfile` on every push to `main`. Address:
+from the repo's `Dockerfile`. Address:
 <https://possession-cut-production.up.railway.app>.
 
 **To open it, two variables are yours to set** (Railway dashboard, the service, Variables):
@@ -385,8 +385,8 @@ the clean-up days and `ANTHROPIC_WORKSPACE_ID`).
 A game is bigger than the volume, so it lives on the temporary disk. That has one
 consequence worth remembering: **a redeploy or restart wipes uploaded games.** The job
 and its clip list stay, but review playback and export need the file, so the game would
-have to be uploaded again. Since every push to `main` redeploys, finish and download a
-cut before code changes go out. On the Pro plan (50 GB volume) set
+have to be uploaded again. Finish and download a cut before new code is deployed. On
+the Pro plan (50 GB volume) set
 `UPLOADS_DIR=/data/uploads` and this goes away.
 
 **What keeps the disk from filling.** Uploaded games are deleted 7 days after their job
@@ -403,8 +403,20 @@ the server's disk: no file picker, no job from a path, no "reveal in folder".
 **The self-check.** `python -m possession_cut.selfcheck` renders two minutes of a
 scripted game and runs calibration, analysis and export on it, checking each against the
 script. Railway runs it before every deploy (the service's pre-deploy command), so a build with a broken
-ffmpeg, OCR model or font is refused instead of going live. It takes about two minutes
-here.
+ffmpeg, OCR model or font is refused instead of going live. It took 32 seconds on
+Railway and passed every check there, against about two minutes on this PC.
+
+**Deploying new code.** My pushes to `main` did not start a deploy by themselves; each
+deploy so far was started by re-attaching the repository. That means the Railway GitHub
+App most likely has no access to this repository for push notifications. Until it does
+(GitHub, Settings, Applications, Railway, Configure), deploy with Ctrl+K, **Deploy
+Latest Commit** in Railway. The service only redeploys for changes under `backend/`,
+`frontend/`, `tools/` or to the `Dockerfile`, so a docs-only push never wipes an
+uploaded game. `/api/health` shows which commit is live as `build`.
+
+**Service settings**, set on the service because Railway has deprecated `railway.json`:
+build from `Dockerfile`, pre-deploy command `python -m possession_cut.selfcheck`, health
+check `/api/health`, restart on failure.
 
 **Cost.** The Hobby plan is 5 dollars a month including 5 dollars of usage, billed at
 20 dollars per processor core per month and 10 per GB of memory per month for what is

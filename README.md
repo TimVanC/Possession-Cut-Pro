@@ -129,10 +129,14 @@ What to know:
 - **Uploaded games sit on the temporary disk**, because a small plan's volume (5 GB) is
   smaller than one game. A redeploy or restart wipes that disk: the job stays, but the
   game has to be uploaded again to keep working on it. Finish and download a cut before
-  pushing new code. A plan with a bigger volume can point `UPLOADS_DIR` at `/data/uploads`.
+  deploying new code. A plan with a bigger volume can point `UPLOADS_DIR` at `/data/uploads`.
 - **Old exports are removed to make room** when the volume is nearly full. Download the
   ones you want to keep.
-- Every push to the connected branch redeploys.
+- **Deploying new code.** In Railway press Ctrl+K and choose **Deploy Latest Commit**.
+  For pushes to deploy by themselves, the Railway GitHub App needs access to the
+  repository (GitHub, Settings, Applications, Railway, Configure). Only changes under
+  `backend/`, `frontend/`, `tools/` or to the `Dockerfile` redeploy; a docs-only push does not.
+- **Which build is live** is shown as `build` at `/api/health`.
 
 ## Hosted page with a local engine
 
