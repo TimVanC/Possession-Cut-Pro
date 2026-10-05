@@ -18,7 +18,7 @@ behind a password.
 | NFL, NHL, MLB adapters | Built and unit tested against recorded league data. Never run on real footage. |
 | Hosted on Railway | Live at <https://possession-cut-production.up.railway.app>. The image built first time and passes the pipeline self-check there on every deploy. It is closed until you set a password, and no game has been run on it yet (see "Hosted on Railway"). |
 | Docker | The image builds and runs on Railway. `docker compose` on a local machine is unrun: Docker is not installed here. |
-| Hosted page talking to the local engine | Deployed on Vercel. The engine's side is tested; the browser's side is not (see Known gaps). |
+| The Vercel address | Forwards to the Railway app, checked in a browser. (It first pointed at an engine on your own PC, which is what the "Start the engine" screen was.) |
 | Auto-start at login | Script written. Not run by me: it changes what starts when you log in, so that click is yours. |
 
 Tests: 343 pass. 299 are logic tests that run in seconds; 44 render a synthetic broadcast and
@@ -26,13 +26,13 @@ run the pipeline and the API on it. Lint is clean and the frontend type-checks a
 
 ## What to test first with a real NBA game
 
-1. In the project folder, double-click `install-autostart.cmd` once (or `start.cmd` each
-   time). The first start takes a few minutes while it installs what it needs.
-2. Open <https://possession-cut-pro.vercel.app>. Chrome asks once for permission to reach
-   your local network: allow it. If the page stays on "Start the engine to begin" for more
-   than a minute, open <http://127.0.0.1:8000> instead (same app, served by the engine
-   itself) and tell me, because that means the hosted connection needs another look.
-3. Click **Upload a game video** and pick a full broadcast. About a minute for 5 GB.
+1. In Railway, open the project **possession-cut**, the service, **Variables**, and add
+   `APP_PASSWORD` (a password you choose) and `ANTHROPIC_API_KEY` (your Claude key).
+2. Open <https://possession-cut-production.up.railway.app> (the Vercel address forwards
+   there) and sign in.
+   To run it on this PC instead: double-click `start.cmd` and open <http://127.0.0.1:8000>.
+3. Click **Upload a game video** and pick a full broadcast. On Railway that goes over your
+   internet connection (roughly 20 to 70 minutes for 5 GB); on this PC, about a minute.
 4. Game setup: set the date, **Find games**, pick the game, pick the team, leave the start
    on **Auto: start of the biggest run**, save.
 5. Calibration: check that each field reads what the frame shows (scores, period, clock,
@@ -41,7 +41,8 @@ run the pipeline and the API on it. Lint is clean and the frontend type-checks a
    time left.
 7. Review: play the whole cut once with **Play from here through the end**. Look for the
    things listed under "What to check by eye" below.
-8. Export, then run `python tools/verify_export.py exports/<file>.mp4 --calibration data/jobs/<id>/calibration.json`.
+8. Export and download the video. (On this PC you can also run
+   `python tools/verify_export.py exports/<file>.mp4 --calibration data/jobs/<id>/calibration.json`.)
 
 Try a second broadcaster early (TNT, NBC, Prime). Everything below was tuned on one ESPN/ABC game.
 
@@ -319,10 +320,6 @@ under 15 minutes.
 
 ## Known gaps
 
-- **The hosted page reaching the local engine is untested in a real browser.** My test
-  browser blocks a public page from calling a local address. What is tested: the engine
-  answers Chrome's permission check correctly for the listed site and refuses others.
-  `http://127.0.0.1:8000` serves the same app with no cross-site step at all.
 - **`install-autostart.cmd` has not been run.** In particular I have not seen whether any
   window flashes at login.
 - **One real game.** The lag handling, the 23-reset rule and the free throw test are tuned
@@ -430,12 +427,8 @@ about a minute locally. Analysis speed on Railway is unknown until a game runs t
 
 ## Vercel
 
-The Vercel site still talks to an engine on your own computer; it does not know about
-Railway. The Railway address serves the same app by itself, so Vercel is not needed for
-the hosted copy. Pointing the Vercel address at Railway is a one-line redirect, which I
-have left for you to decide once the Railway copy has run a game.
-
-The project `possession-cut-pro` deploys the frontend only, from the `frontend` directory:
+The Vercel project `possession-cut-pro` (root directory `frontend`) now only forwards to
+Railway. `frontend/vercel.json`:
 
 ```json
 {
@@ -443,15 +436,23 @@ The project `possession-cut-pro` deploys the frontend only, from the `frontend` 
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "redirects": [
+    { "source": "/", "destination": "https://possession-cut-production.up.railway.app/", "permanent": false },
+    { "source": "/(.*)", "destination": "https://possession-cut-production.up.railway.app/$1", "permanent": false }
+  ]
 }
 ```
 
+It began as the frontend alone, talking to an engine on your own computer, and showed
+"Start the engine to begin" to anyone without one. My first redirect missed the front
+page (`/:path*` does not match `/` on Vercel), which loaded while its files were sent
+elsewhere and came up blank for a few minutes; the front page now has its own rule.
+
 Vercel had suggested a two-service setup and asked for three things to be confirmed:
 
-- **Service names:** one project, the frontend. There is no backend service.
-- **What is public:** the static page only. It holds no data and no keys.
-- **Bindings:** none. The page finds the engine at `http://127.0.0.1:8000` in the browser.
+- **Service names:** one Vercel project, which is only a redirect. The app is the Railway service.
+- **What is public:** the redirect, and the Railway app's sign-in screen. Everything else needs the password.
+- **Bindings:** none.
 
-The engine allows that site because `.env` on this machine has
-`CORS_ORIGINS=https://possession-cut-pro.vercel.app`. A different domain needs adding there.
+The redirects are temporary (307) so the address can be pointed somewhere else, or back
+at a static frontend, without browsers remembering the old answer.

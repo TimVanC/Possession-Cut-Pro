@@ -19,7 +19,7 @@ you give it, and it never downloads footage.
 5. Start the engine:
    - Windows: double-click `start.cmd`
    - Mac / Linux: `./dev.sh` (or `make dev`)
-6. Open the app: your hosted page if you have one (see below), or <http://localhost:5173> after `dev.cmd` / `./dev.sh`.
+6. Open <http://127.0.0.1:8000> (or <http://localhost:5173> after `dev.cmd` / `./dev.sh`, when working on the code).
 
 The first run creates `.venv` and installs what it needs, which takes a few minutes.
 
@@ -138,17 +138,16 @@ What to know:
   `backend/`, `frontend/`, `tools/` or to the `Dockerfile` redeploy; a docs-only push does not.
 - **Which build is live** is shown as `build` at `/api/health`.
 
-## Hosted page with a local engine
+## The Vercel address
 
-The frontend can also be deployed on its own as a static site (`frontend/vercel.json` is
-set up for Vercel with `frontend` as the root directory) and talk to the engine running on
-your computer. Uploads then go to that engine, not to the internet.
+`frontend/vercel.json` makes the Vercel site forward every address to the hosted app on
+Railway, so either link opens the same thing. The redirect is temporary (307), so
+changing it takes effect at once.
 
-1. Add the site's address to `.env`: `CORS_ORIGINS=https://your-app.vercel.app`.
-2. Start the engine (`start.cmd`, or install the autostart).
-3. Open the site in Chrome or Edge. It finds the engine at `http://127.0.0.1:8000` by itself; Chrome asks once for permission to reach your local network.
-
-This works only on the computer the engine runs on.
+To run a static page that talks to an engine on your own computer instead, replace the
+`redirects` block with `"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]`,
+add the site's address to `.env` as `CORS_ORIGINS=https://your-app.vercel.app`, and start
+the engine. On the computer the engine runs on, <http://127.0.0.1:8000> needs none of that.
 
 ## Docker
 
