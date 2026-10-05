@@ -5,8 +5,13 @@
   "outputDirectory": "dist",
   "redirects": [
     {
-      "source": "/:path*",
-      "destination": "https://possession-cut-production.up.railway.app/:path*",
+      "source": "/",
+      "destination": "https://possession-cut-production.up.railway.app/",
+      "permanent": false
+    },
+    {
+      "source": "/(.*)",
+      "destination": "https://possession-cut-production.up.railway.app/$1",
       "permanent": false
     }
   ]
