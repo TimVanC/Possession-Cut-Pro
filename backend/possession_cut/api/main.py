@@ -21,6 +21,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from .. import __version__
 from ..config import REPO_ROOT, get_settings
 from ..db import get_engine
+from .auth import require_session
+from .auth import router as auth_router
 from .routes import router
 from .uploads import router as uploads_router
 
@@ -61,6 +63,10 @@ def create_app() -> FastAPI:
             response.headers["Access-Control-Allow-Private-Network"] = "true"
         return response
 
+    # added after CORS, so it runs first: nothing unsigned reaches a route
+    app.middleware("http")(require_session)
+
+    app.include_router(auth_router)
     app.include_router(router)
     app.include_router(uploads_router)
 

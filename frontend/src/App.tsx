@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
-import { api, connectEngine, engineBase, saveEngine, savedEngine } from "./api";
+import { SIGNED_OUT, api, connectEngine, engineBase, saveEngine, savedEngine } from "./api";
 import { Note, Spinner } from "./components";
 import CalibrationScreen from "./screens/Calibration";
 import JobsList from "./screens/JobsList";
@@ -102,19 +102,86 @@ function ConnectEngine({ onConnected }: { onConnected: (h: Health) => void }) {
   );
 }
 
+/** One password opens a copy that runs on a server. */
+function SignIn({ health, onSignedIn }: { health: Health; onSignedIn: () => void }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.login(password);
+      onSignedIn();
+    } catch (err) {
+      setError((err as Error).message || "Could not sign in.");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="mx-auto flex min-h-full max-w-sm flex-col justify-center px-6 py-16">
+      <h1 className="text-2xl font-semibold">
+        Possession <span className="text-court">Cut</span>
+      </h1>
+      {health.auth.configured ? (
+        <form onSubmit={submit} className="mt-6">
+          <label className="label" htmlFor="password">
+            Password
+          </label>
+          <input
+            id="password"
+            type="password"
+            className="field"
+            autoFocus
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button type="submit" className="btn btn-primary mt-4 w-full justify-center" disabled={!password || busy}>
+            {busy ? <Spinner /> : "Sign in"}
+          </button>
+          {error && (
+            <div className="mt-4">
+              <Note tone="error">{error}</Note>
+            </div>
+          )}
+        </form>
+      ) : (
+        <div className="mt-6">
+          <Note tone="warn">
+            This copy has no password yet, so it is closed. Add a variable named <b>APP_PASSWORD</b> in the server's
+            settings. It restarts by itself; then reload this page and sign in with it.
+          </Note>
+        </div>
+      )}
+    </main>
+  );
+}
+
 function Banner({ health }: { health: Health }) {
   const live = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 8000, initialData: health });
   const h = live.data ?? health;
   const notes: { tone: "warn" | "error"; text: string }[] = [];
   if (!h.ffmpeg) notes.push({ tone: "error", text: "ffmpeg was not found. Install ffmpeg 6+ and restart." });
   if (!h.worker)
-    notes.push({ tone: "warn", text: "The worker is not running, so queued jobs will wait. Start everything with start.cmd or ./dev.sh." });
+    notes.push({
+      tone: "warn",
+      text: h.hosted
+        ? "The worker is not running, so queued jobs will wait. It normally starts with the server; restart the service if this stays."
+        : "The worker is not running, so queued jobs will wait. Start everything with start.cmd or ./dev.sh.",
+    });
   if (!h.claude.configured)
     notes.push({
       tone: "warn",
       text: h.claude.needs_workspace
-        ? "Claude is off: the API key needs a workspace. Add ANTHROPIC_WORKSPACE_ID to .env (Claude Console, Settings, Workspaces) and restart. Until then calibration uses the on-device detector and captions use a template."
-        : `Claude is off (${h.claude.note ?? "no API key"}). Calibration uses the on-device detector and captions use a template.`,
+        ? `Claude is off: the API key needs a workspace. Add ANTHROPIC_WORKSPACE_ID ${h.hosted ? "to the server's variables" : "to .env"} (Claude Console, Settings, Workspaces)${h.hosted ? "" : " and restart"}. Until then calibration uses the built-in detector and captions use a template.`
+        : h.hosted
+          ? "Claude is off: add ANTHROPIC_API_KEY to the server's variables to turn it on. Until then calibration uses the built-in detector and captions use a template."
+          : `Claude is off (${h.claude.note ?? "no API key"}). Calibration uses the on-device detector and captions use a template.`,
     });
   if (notes.length === 0) return null;
   return (
@@ -147,6 +214,16 @@ function Shell({ health }: { health: Health }) {
         </nav>
         <span className="ml-auto text-xs text-ink-400">
           v{health.version}
+          {health.auth.required && (
+            <button
+              className="ml-3 underline decoration-dotted hover:text-ink-100"
+              onClick={() => {
+                void api.logout().finally(() => window.location.reload());
+              }}
+            >
+              Sign out
+            </button>
+          )}
           {engineBase() && (
             <button
               className="ml-3 underline decoration-dotted hover:text-ink-100"
@@ -185,6 +262,12 @@ export default function App() {
       setChecked(true);
     });
   }, []);
+  // any request answered "not signed in" puts the sign-in screen back
+  useEffect(() => {
+    const signedOut = () => setHealth((h) => (h ? { ...h, auth: { ...h.auth, authenticated: false } } : h));
+    window.addEventListener(SIGNED_OUT, signedOut);
+    return () => window.removeEventListener(SIGNED_OUT, signedOut);
+  }, []);
   if (!checked)
     return (
       <div className="flex h-full items-center justify-center">
@@ -192,6 +275,16 @@ export default function App() {
       </div>
     );
   if (!health) return <ConnectEngine onConnected={setHealth} />;
+  if (health.auth?.required && !health.auth.authenticated)
+    return (
+      <SignIn
+        health={health}
+        onSignedIn={() => {
+          queryClient.clear();
+          void connectEngine().then(setHealth);
+        }}
+      />
+    );
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>

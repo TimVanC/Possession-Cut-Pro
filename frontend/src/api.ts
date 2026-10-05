@@ -111,10 +111,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* not json */
     }
+    // the session ran out (or was never there): the app shows the sign-in screen
+    if (res.status === 401 && path !== "/api/login") window.dispatchEvent(new Event(SIGNED_OUT));
     throw new ApiError(res.status, detail);
   }
   return (await res.json()) as T;
 }
+
+/** Fired on `window` when the engine says the session is not signed in. */
+export const SIGNED_OUT = "possession-cut:signed-out";
 
 const json = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
 const qs = (params: Record<string, string | number | undefined | null>): string => {
@@ -239,6 +244,8 @@ export interface JobSetup {
 
 export const api = {
   health: () => request<Health>("/api/health"),
+  login: (password: string) => request<{ authenticated: boolean }>("/api/login", json({ password })),
+  logout: () => request<{ authenticated: boolean }>("/api/logout", { method: "POST" }),
   sports: () => request<Sport[]>("/api/sports"),
   browse: (path: string) => request<BrowseResult>(`/api/fs/browse${qs({ path })}`),
   inbox: () => request<{ dir: string; files: { name: string; path: string; size: number }[]; waiting: number; drafts: number[] }>("/api/inbox"),

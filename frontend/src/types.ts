@@ -194,6 +194,8 @@ export interface ExportRecord {
   size_bytes: number;
   error: string | null;
   url: string | null;
+  /** Rendered, but the file has since been cleaned up to free space. */
+  file_removed: boolean;
   created_at: string;
 }
 
@@ -212,6 +214,9 @@ export interface Sport {
 export interface Health {
   ok: boolean;
   version: string;
+  /** The engine runs on a server, not on the computer showing this page. */
+  hosted: boolean;
+  auth: { required: boolean; authenticated: boolean; configured: boolean };
   ffmpeg: boolean;
   worker: boolean;
   claude: {

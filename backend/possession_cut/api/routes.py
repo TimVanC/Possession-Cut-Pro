@@ -39,6 +39,7 @@ from ..pipeline.window import biggest_run_start
 from ..sports import PlayByPlayUnavailable, available_sports, get_adapter
 from ..worker.inbox import VIDEO_EXTENSIONS, is_video
 from ..worker.runner import job_dir, load_calibration, save_calibration
+from .auth import signed_in
 from .progress import progress_view
 from .uploads import is_upload
 
@@ -57,9 +58,19 @@ def _job_or_404(s, job_id: int) -> Job:
     return job
 
 
+def _proxy_path(job_id: int) -> Path:
+    return get_settings().scratch_path(job_id) / "proxy.mp4"
+
+
+def _local_only() -> None:
+    """Refuse what only makes sense when the engine is on the user's own computer."""
+    if get_settings().hosted:
+        raise HTTPException(403, "Not available on a hosted copy. Upload the file instead.")
+
+
 def _media_ready(job: Job) -> bool:
     probe = job.probe or {}
-    return bool(probe.get("browser_playable")) or (job_dir(job.id) / "proxy.mp4").exists()
+    return bool(probe.get("browser_playable")) or _proxy_path(job.id).exists()
 
 
 def job_out(job: Job) -> dict[str, Any]:
@@ -124,7 +135,8 @@ def export_out(export: Export) -> dict[str, Any]:
         "caption": export.caption, "cutlist_path": export.cutlist_path, "caption_path": export.caption_path,
         "duration": export.duration, "size_bytes": export.size_bytes, "error": export.error,
         "settings": export.settings or {},
-        "url": f"/api/exports/{export.id}/file" if export.status == "done" else None,
+        "url": f"/api/exports/{export.id}/file" if export.status == "done" and export.path and Path(export.path).exists() else None,
+        "file_removed": export.status == "done" and not (export.path and Path(export.path).exists()),
         "created_at": export.created_at.isoformat() if export.created_at else None,
     }
 
@@ -154,8 +166,16 @@ def worker_alive() -> bool:
 
 
 @router.get("/health")
-def health() -> dict:
+def health(request: Request) -> dict:
     settings = get_settings()
+    auth = {
+        "required": settings.auth_required,
+        "authenticated": signed_in(request, settings),
+        "configured": bool(settings.app_password) or not settings.auth_required,
+    }
+    if not auth["authenticated"]:
+        # enough for the page to show the sign-in screen, and nothing about the machine
+        return {"ok": True, "version": __version__, "hosted": settings.hosted, "auth": auth}
     try:
         ffmpeg_bin()
         ffmpeg_ok = True
@@ -165,6 +185,8 @@ def health() -> dict:
     return {
         "ok": True,
         "version": __version__,
+        "hosted": settings.hosted,
+        "auth": auth,
         "ffmpeg": ffmpeg_ok,
         "worker": worker_alive(),
         "claude": {
@@ -206,6 +228,7 @@ def sports() -> list[dict]:
 
 @router.get("/fs/browse")
 def browse(path: str = "") -> dict:
+    _local_only()
     settings = get_settings()
     roots = [str(r) for r in settings.roots]
     if not path:
@@ -284,7 +307,7 @@ def run_start(sport: str, game_id: str, team: str, source_path: str | None = Non
     """Where "auto: start of biggest run" would begin, shown in the form before analysis."""
     try:
         adapter = get_adapter(sport)
-        sidecar = load_sidecar(source_path) if source_path else None
+        sidecar = load_sidecar(source_path) if source_path and is_allowed_path(Path(source_path)) else None
         pbp, sides = sidecar if sidecar else (None, {})
         if pbp is None:
             pbp = adapter.fetch_pbp(game_id)
@@ -424,8 +447,11 @@ def delete_job(job_id: int) -> dict:
         for export in s.exec(select(Export).where(Export.job_id == job_id)).all():
             s.delete(export)
         s.delete(job)
-    folder = get_settings().jobs_path / str(job_id)
+    settings = get_settings()
+    folder = settings.jobs_path / str(job_id)
     shutil.rmtree(folder, ignore_errors=True)
+    if settings.scratch_dir:
+        shutil.rmtree(settings._resolve(settings.scratch_dir) / str(job_id), ignore_errors=True)
     if uploaded_copy is not None:
         uploaded_copy.unlink(missing_ok=True)
     return {"deleted": job_id}
@@ -786,7 +812,8 @@ def export_caption(export_id: int) -> str:
 
 @router.post("/exports/{export_id}/reveal")
 def reveal_export(export_id: int) -> dict:
-    """Open the exports folder with the file selected (this is a local app)."""
+    """Open the exports folder with the file selected (only when the engine is local)."""
+    _local_only()
     with session_scope() as s:
         path = Path(_export_or_404(s, export_id).path)
     if not path.exists():
@@ -813,7 +840,7 @@ def media_source(job_id: int) -> FileResponse:
         job = _job_or_404(s, job_id)
         source = Path(job.source_path)
         playable = bool((job.probe or {}).get("browser_playable"))
-    proxy = job_dir(job_id) / "proxy.mp4"
+    proxy = _proxy_path(job_id)
     path = proxy if proxy.exists() else source
     if not path.is_file():
         raise HTTPException(404, "The source file is no longer where it was.")

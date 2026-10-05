@@ -27,6 +27,7 @@ from ..pipeline.export import make_proxy, plan_export, render, render_overlay, w
 from ..pipeline.ocr import get_engine
 from ..pipeline.probe import Probe, probe_file
 from ..sports import get_adapter
+from .janitor import make_room
 
 log = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ def run_analyze(job_id: int) -> None:
         raise Cancelled()
 
     # a source the browser cannot play needs a preview copy for the review screen
-    proxy = d / "proxy.mp4"
+    proxy = settings.scratch_path(job_id) / "proxy.mp4"
     if not probe.browser_playable and not proxy.exists():
         ctx.progress(0.93, "proxy", "Preparing a preview copy", force=True)
         try:
@@ -269,11 +270,12 @@ def run_export(job_id: int) -> None:
         crossfade=bool(opts.get("audio_crossfade", True)),
         crossfade_ms=float(opts.get("crossfade_ms", 80)),
     )
-    d = job_dir(job_id)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = f"{_safe_name(title or summary.get('suggested_title') or Path(source_name).stem)}_{stamp}"
     out_path = settings.exports_path / f"{base}.mp4"
-    work = d / "export_work"
+    work = settings.scratch_path(job_id) / "export_work"
+    # about 1.2 MB per second of 1080x1920 at this quality, plus slack; old exports go first
+    make_room(int(plan.duration * 1.6e6) + 300_000_000)
     overlay = render_overlay(title, caption_bar, plan.placement, work / "overlay.png")
 
     ctx.progress(0.01, "rendering", "Rendering", force=True)

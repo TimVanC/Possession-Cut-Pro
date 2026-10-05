@@ -16,6 +16,7 @@ from sqlmodel import select
 from ..config import get_settings
 from ..db import Export, Job, get_engine, session_scope, touch, utcnow
 from .inbox import POLL_SECONDS, InboxWatcher
+from .janitor import sweep
 from .runner import PREVIOUS_STATUS, TASKS, Cancelled, job_dir
 
 log = logging.getLogger("possession_cut.worker")
@@ -115,6 +116,18 @@ def _inbox_loop(stop: threading.Event) -> None:
         stop.wait(POLL_SECONDS)
 
 
+def _janitor_loop(stop: threading.Event) -> None:
+    """Hourly: remove uploads and exports past the shelf life set in the settings."""
+    while not stop.is_set():
+        try:
+            removed = sweep()
+            if any(removed.values()):
+                log.info("janitor: %s", removed)
+        except Exception:
+            log.exception("janitor sweep failed")
+        stop.wait(3600.0)
+
+
 def _heartbeat_loop(stop: threading.Event) -> None:
     """Touch a file every few seconds so the API can tell the worker is alive."""
     path = get_settings().heartbeat_path
@@ -136,6 +149,7 @@ def main() -> int:
         log.info("requeued %d interrupted task(s)", requeued)
     stop = threading.Event()
     threading.Thread(target=_inbox_loop, args=(stop,), daemon=True, name="inbox").start()
+    threading.Thread(target=_janitor_loop, args=(stop,), daemon=True, name="janitor").start()
     log.info("worker ready (analysis workers: %d, sample fps: %s, inbox: %s)",
              settings.workers, settings.ocr_sample_fps, settings.inbox_path)
     beat = threading.Thread(target=_heartbeat_loop, args=(stop,), daemon=True, name="heartbeat")

@@ -8,11 +8,11 @@ RUN npm ci --no-fund --no-audit
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.12-slim
+# trixie carries ffmpeg 7; the export uses options older releases do not have
+FROM python:3.12-slim-trixie
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     API_HOST=0.0.0.0 \
-    API_PORT=8000 \
     INBOX_DIR=/app/inbox \
     DATA_DIR=/app/data \
     EXPORTS_DIR=/app/exports \
@@ -28,6 +28,7 @@ RUN pip install ./backend && pip install -e ./backend --no-deps
 COPY --from=web /web/dist frontend/dist
 COPY tools tools
 RUN mkdir -p inbox data exports /games
+# listens on $PORT when the host sets one (Railway does), otherwise 8000
 EXPOSE 8000
 # the launcher runs the API (which also serves the built frontend) and the worker together
 CMD ["python", "-m", "possession_cut.dev", "--no-frontend"]

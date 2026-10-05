@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api, url } from "../api";
-import { Modal, Note, Spinner, TaskProgress, Toggle } from "../components";
+import { Modal, Note, Spinner, TaskProgress, Toggle, useHosted } from "../components";
 import { formatBytes, formatDate, formatDuration, useJobEvents } from "../lib";
 import type { ExportRecord, Job } from "../types";
 
@@ -17,6 +17,7 @@ function Result({ record }: { record: ExportRecord }) {
       /* clipboard blocked: the text is selectable below */
     }
   };
+  const hosted = useHosted();
   return (
     <div className="grid grid-cols-[240px_1fr] gap-5">
       <video src={url(record.url!)} controls playsInline className="w-full rounded-lg border border-ink-700 bg-black" style={{ aspectRatio: "9 / 16" }} />
@@ -27,18 +28,20 @@ function Result({ record }: { record: ExportRecord }) {
             {formatDuration(record.duration)} · {formatBytes(record.size_bytes)} · 1080×1920 · {formatDate(record.created_at)}
           </div>
         </div>
-        <div className="num break-all rounded-lg bg-ink-850 px-3 py-2 text-xs text-ink-300">
-          {record.path}
-          <div className="mt-1 text-ink-400">with the cut list (.cutlist.json) and caption (.caption.txt) beside it</div>
-        </div>
+        {!hosted && (
+          <div className="num break-all rounded-lg bg-ink-850 px-3 py-2 text-xs text-ink-300">
+            {record.path}
+            <div className="mt-1 text-ink-400">with the cut list (.cutlist.json) and caption (.caption.txt) beside it</div>
+          </div>
+        )}
         <div>
           <span className="label">Suggested caption</span>
           <textarea readOnly className="field h-28 resize-none text-[13px] leading-relaxed" value={record.caption} />
         </div>
         <div className="flex flex-wrap gap-2">
-          <button className="btn" onClick={() => reveal.mutate()}>Reveal in folder</button>
+          <a className="btn btn-primary" href={url(`${record.url}?download=true`)}>Download</a>
           <button className="btn" onClick={copy}>{copied ? "Copied" : "Copy caption"}</button>
-          <a className="btn" href={url(`${record.url}?download=true`)}>Download</a>
+          {!hosted && <button className="btn" onClick={() => reveal.mutate()}>Reveal in folder</button>}
         </div>
         {reveal.error && <Note tone="error">{(reveal.error as Error).message}</Note>}
       </div>
@@ -112,7 +115,7 @@ export default function ExportDialog({
           <Result record={current} />
           <button className="btn btn-sm" onClick={() => setShowing(null)}>Export again with different text</button>
         </div>
-      ) : exporting || start.isPending || (current && current.status !== "failed") ? (
+      ) : exporting || start.isPending || (current && current.status !== "failed" && !current.file_removed) ? (
         <div className="py-10 text-center">
           <div className="text-base font-semibold">Rendering {formatDuration(runtime)} of video</div>
           <div className="mx-auto mt-6 max-w-md">
@@ -123,6 +126,9 @@ export default function ExportDialog({
       ) : (
         <div className="space-y-4">
           {current?.status === "failed" && <Note tone="error">The render failed: {current.error}</Note>}
+          {current?.file_removed && (
+            <Note tone="warn">That export's file was cleaned up to free space on the server. Render it again to get it back.</Note>
+          )}
           {job.status === "failed" && job.error && !current && <Note tone="error">{job.error}</Note>}
           <div className="num text-ink-300">
             {enabledCount} clips · {formatDuration(runtime)} · 9:16

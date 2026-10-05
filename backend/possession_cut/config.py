@@ -8,7 +8,7 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,8 +36,22 @@ class Settings(BaseSettings):
     # computer's local app-data folder when data/ sits inside a cloud-synced folder.
     uploads_dir: str = ""
 
+    # -- running on a server instead of your own computer ---------------------------
+    # HOSTED=1: the page gets no view of the server's disk (no file picker, no "reveal in
+    # folder"), and nothing is served without a password.
+    hosted: bool = False
+    # The one password that opens the app. Setting it turns sign-in on, hosted or not.
+    app_password: str = ""
+    # Big temporary files (preview copies, export batches). Empty = inside the job folder.
+    scratch_dir: str = ""
+    # Days to keep an uploaded game after its job last changed, and a finished export.
+    # 0 = keep until deleted by hand.
+    upload_retention_days: float = Field(default=0, ge=0)
+    export_retention_days: float = Field(default=0, ge=0)
+
     api_host: str = "127.0.0.1"
-    api_port: int = 8000
+    # hosts such as Railway say which port to listen on with PORT
+    api_port: int = Field(default=8000, validation_alias=AliasChoices("API_PORT", "PORT"))
     ffmpeg_path: str = ""
     ffprobe_path: str = ""
     analysis_workers: int = Field(default=0, ge=0)
@@ -89,11 +103,24 @@ class Settings(BaseSettings):
         return self.data_path / "possession_cut.db"
 
     @property
+    def auth_required(self) -> bool:
+        return self.hosted or bool(self.app_password)
+
+    def scratch_path(self, job_id: int | str) -> Path:
+        """Where a job's big temporary files go."""
+        p = (self._resolve(self.scratch_dir) / str(job_id)) if self.scratch_dir else self.job_dir(job_id)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    @property
     def roots(self) -> list[Path]:
-        """Folders the file picker may browse. Always includes inbox and exports."""
+        """Folders a source file may come from. Always includes inbox, exports and uploads;
+        on a server, nothing else."""
         raw = [r.strip() for r in self.allowed_roots.replace("\n", os.pathsep).split(os.pathsep)]
         roots = [Path(r).expanduser().resolve() for r in raw if r]
-        if not roots:
+        if self.hosted:
+            roots = []
+        elif not roots:
             roots = [Path.home().resolve()]
         for extra in (self.inbox_path, self.exports_path, self.uploads_path):
             extra = extra.resolve()
@@ -104,7 +131,8 @@ class Settings(BaseSettings):
     @property
     def allowed_origins(self) -> list[str]:
         extra = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
-        return ["http://localhost:5173", "http://127.0.0.1:5173", *extra]
+        local = [] if self.hosted else ["http://localhost:5173", "http://127.0.0.1:5173"]
+        return [*local, *extra]
 
     @property
     def heartbeat_path(self) -> Path:

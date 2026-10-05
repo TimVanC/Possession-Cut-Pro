@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, type JobSetup } from "../api";
-import { FileBrowser, Note, Spinner, Toggle } from "../components";
+import { FileBrowser, Note, Spinner, Toggle, useHosted } from "../components";
 import { UploadBox } from "../Upload";
 import { formatBytes, formatClock, formatDuration, parseClock, periodLabel } from "../lib";
 import type { Game, StartSpec } from "../types";
@@ -24,6 +24,7 @@ export default function NewJob() {
   const sports = useQuery({ queryKey: ["sports"], queryFn: api.sports, staleTime: 60_000 });
   const existing = useQuery({ queryKey: ["job", jobId], queryFn: () => api.job(jobId!), enabled: jobId !== null });
 
+  const hosted = useHosted();
   const [browsing, setBrowsing] = useState(false);
   const [sourcePath, setSourcePath] = useState("");
   const [sport, setSport] = useState("nba");
@@ -189,7 +190,7 @@ export default function NewJob() {
             )}
           </div>
         ) : (
-          <UploadBox compact onBrowse={() => setBrowsing(true)} />
+          <UploadBox compact onBrowse={hosted ? undefined : () => setBrowsing(true)} />
         )}
       </section>
 

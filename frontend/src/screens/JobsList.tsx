@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, url } from "../api";
-import { Note, Spinner, StatusBadge, TaskProgress } from "../components";
+import { Note, Spinner, StatusBadge, TaskProgress, useHosted } from "../components";
 import { UploadBox } from "../Upload";
 import { formatBytes, formatDate, formatDuration, gameTitle, jobRoute } from "../lib";
 import type { Job } from "../types";
@@ -138,12 +138,13 @@ export default function JobsList() {
   });
   const inbox = useQuery({ queryKey: ["inbox"], queryFn: api.inbox, refetchInterval: 10000 });
   const navigate = useNavigate();
+  const hosted = useHosted();
   const empty = jobs.data?.length === 0;
   return (
     <main>
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">{empty ? "Make your first cut" : "Jobs"}</h1>
-        {inbox.data && inbox.data.waiting > 0 && (
+        {!hosted && inbox.data && inbox.data.waiting > 0 && (
           <span
             className="rounded-full bg-court/15 px-2.5 py-0.5 text-xs font-semibold text-court"
             title={`Files waiting in ${inbox.data.dir}`}
@@ -160,7 +161,7 @@ export default function JobsList() {
       )}
 
       <div className="mt-5">
-        <UploadBox compact={!empty} onBrowse={() => navigate("/new")} />
+        <UploadBox compact={!empty} onBrowse={hosted ? undefined : () => navigate("/new")} />
       </div>
 
       <div className="mt-6">

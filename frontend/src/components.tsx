@@ -4,6 +4,12 @@ import { api } from "./api";
 import { STATUS_TEXT, formatBytes, formatEta } from "./lib";
 import type { JobStatus, TaskProgress as TaskProgressData } from "./types";
 
+/** True when the engine runs on a server: no file picker, no "reveal in folder". */
+export function useHosted(): boolean {
+  const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: 30_000 });
+  return !!health.data?.hosted;
+}
+
 const STATUS_STYLE: Record<JobStatus, string> = {
   draft: "bg-ink-700 text-ink-300",
   calibrating: "bg-sky-950 text-sky-300",
