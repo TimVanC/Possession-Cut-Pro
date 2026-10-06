@@ -112,6 +112,9 @@ export interface Job extends TaskProgress {
   } | null;
   summary: JobSummary | null;
   media_ready: boolean;
+  /** Which file the review player gets: the small preview copy, the original, or nothing playable yet. */
+  media_source: "proxy" | "source" | null;
+  preview: { wanted: boolean; ready: boolean; building: boolean; progress: number | null; failed: string | null } | null;
   claude_spent_usd: number;
   created_at: string;
   updated_at: string;

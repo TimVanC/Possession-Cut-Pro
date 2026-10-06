@@ -24,6 +24,7 @@ import statistics
 import time
 from typing import TYPE_CHECKING
 
+from ..config import get_settings
 from . import http
 from .base import FieldSpec, Game, PlayByPlayUnavailable, ScoreChange, ScoringEvent, SportAdapter
 
@@ -52,7 +53,8 @@ _nba_com_down_until = 0.0
 
 
 def _nba_com_reachable() -> bool:
-    return time.time() >= _nba_com_down_until
+    # NBA.com refuses cloud servers outright, so a hosted copy does not wait on it
+    return not get_settings().hosted and time.time() >= _nba_com_down_until
 
 
 def _nba_com_failed(reason: str) -> None:

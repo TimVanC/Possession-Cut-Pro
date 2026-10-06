@@ -323,7 +323,24 @@ def analyze(
     )
 
     notes = tl.notes
-    if notes.get("score_unreadable", 0) > 0.15:
+    live = tl.live
+    side_miss = {
+        side: float((~read & live).sum() / max(1, int(live.sum())))
+        for side, read in (("away", tl.away_read), ("home", tl.home_read))
+    }
+    one_sided = [
+        side for side in ("away", "home")
+        if side_miss[side] > 0.3 and side_miss[side] > 2 * side_miss["home" if side == "away" else "away"]
+    ]
+    if one_sided:
+        # one score box is off: that team's baskets are gone, and the generic note would hide it
+        for side in one_sided:
+            who = pbp_sides.get(side) or cal.teams.get(side) or f"The {side} team"
+            warnings.append(
+                f"{who}'s score could not be read in {side_miss[side]:.0%} of live samples, so its baskets are "
+                f"mostly missing. Fix the {side} score box in calibration and analyze again."
+            )
+    elif notes.get("score_unreadable", 0) > 0.15:
         warnings.append("The score was unreadable in over 15% of live samples; check the score boxes in calibration.")
     if notes.get("clock_unreadable", 0) > 0.15 and adapter.has_clock:
         warnings.append("The game clock was unreadable in over 15% of live samples; check the clock box in calibration.")

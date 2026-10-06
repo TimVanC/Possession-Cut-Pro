@@ -443,23 +443,35 @@ def thumbnail(probe: Probe, t: float, crop_norm: list[float], path: Path, width:
 
 def make_proxy(
     probe: Probe, out_path: Path, progress: Callable[[float, str], None] | None = None,
-    should_stop: Callable[[], bool] | None = None,
+    should_stop: Callable[[], bool] | None = None, seekable: bool = False, threads: int | None = None,
 ) -> Path:
-    """Browser-playable copy of a source the browser cannot play (MKV, TS, AC-3 audio...).
+    """Browser-playable copy of the source for the review screen.
 
-    H.264 video is copied as is; anything else is transcoded to 540p. Audio becomes AAC.
-    The timeline is unchanged, so clip times apply to the proxy directly.
+    ``seekable``: re-encode for playing over a network, at most 480 tall with a keyframe
+    every second, so a jump to any clip starts at once and costs little bandwidth.
+    Otherwise (a source the browser cannot play: MKV, TS, AC-3 audio...) H.264 video is
+    copied as is and anything else is transcoded to 540p. Audio becomes AAC. The timeline
+    is unchanged, so clip times apply to the proxy directly.
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    copy_video = probe.video_codec == "h264" and probe.pix_fmt in ("yuv420p", "yuvj420p") and not probe.interlaced
+    copy_video = (
+        not seekable and probe.video_codec == "h264" and probe.pix_fmt in ("yuv420p", "yuvj420p") and not probe.interlaced
+    )
     cmd = [ffmpeg_bin(), "-y", "-hide_banner", "-loglevel", "error", "-nostdin", "-i", probe.path, "-map", "0:v:0"]
     if probe.has_audio:
-        cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "128k", "-ac", "2"]
+        cmd += ["-map", "0:a:0", "-c:a", "aac", "-b:a", "96k" if seekable else "128k", "-ac", "2"]
     if copy_video:
         cmd += ["-c:v", "copy"]
     else:
-        vf = ("bwdif=mode=send_frame," if probe.interlaced else "") + "scale=-2:540"
-        cmd += ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p"]
+        height = min(480 if seekable else 540, max(2, probe.height)) // 2 * 2
+        vf = ("bwdif=mode=send_frame," if probe.interlaced else "") + f"scale=-2:{height}"
+        preset, crf = ("superfast", "27") if seekable else ("veryfast", "26")
+        cmd += ["-vf", vf, "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p"]
+        if seekable:
+            gop = max(1, int(round(probe.fps or 30.0)))
+            cmd += ["-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0"]
+        if threads:
+            cmd += ["-threads", str(threads)]
     cmd += ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats", str(out_path)]
     _run(cmd, probe.duration, (lambda f: progress(f, "Preparing a preview copy")) if progress else None, should_stop)
     return out_path

@@ -23,12 +23,12 @@ import numpy as np
 
 from ..ai.claude import ClaudeClient, ClaudeError
 from ..sports.base import SportAdapter
-from .bugreader import BugReader, build_reference
+from .bugreader import CHARSETS, VISIBLE_THRESHOLD, BugReader, build_reference
 from .calib_claude import detect_with_claude
-from .calib_local import LocalDetector, size_field_boxes, snap_to_text
+from .calib_local import LocalDetector, separate_fields, size_field_boxes, snap_to_text
 from .frames import extract_frames, save_jpeg
 from .geometry import Box, compute_crop, crop_to_norm, iou, norm_box, to_px
-from .ocr import OcrEngine, parse_clock, parse_period, parse_score, parse_shot_clock
+from .ocr import OcrEngine, parse_clock, parse_period, parse_score, parse_shot_clock, prepare_field
 from .probe import Probe
 
 log = logging.getLogger(__name__)
@@ -313,7 +313,7 @@ def calibrate(
             roles = snap_to_text(found.roles, clusters)
             row = clock_cluster.box if clock_cluster is not None else roles.get("clock")
             if row is not None:
-                roles = detector.snap_to_ink(roles, detector.ink_runs(visible, bug, row))
+                roles = separate_fields(detector.snap_to_ink(roles, detector.ink_runs(visible, bug, row)), roles)
             warnings.extend(found.notes)
     elif claude is not None and claude.unavailable_reason:
         warnings.append(f"Claude vision was not used: {claude.unavailable_reason}")
@@ -354,9 +354,84 @@ def calibrate(
     )
     built = reference_from_frames(frames, visible, tuple(cal.bug), {k: tuple(v) for k, v in cal.fields.items()})
     ref, mask = built if built else (None, None)
+    moved = tune_fields(cal, adapter, frames, engine, ref, mask)
+    if moved:
+        cal.warnings.extend(moved)
+        built = reference_from_frames(frames, visible, tuple(cal.bug), {k: tuple(v) for k, v in cal.fields.items()})
+        ref, mask = built if built else (None, None)
     validate(cal, adapter, frames, times, files, engine, ref, mask)
     step(1.0, "Calibration ready")
     return cal, ref, mask
+
+
+# (top, bottom, left, right) as fractions of the box's own height and width
+TUNE_SHRINKS: tuple[tuple[float, float, float, float], ...] = (
+    (0.08, 0.08, 0.0, 0.0), (0.16, 0.16, 0.0, 0.0), (0.25, 0.25, 0.0, 0.0),
+    (0.0, 0.0, 0.08, 0.08), (0.0, 0.0, 0.16, 0.16),
+    (0.0, 0.0, 0.0, 0.16), (0.0, 0.0, 0.0, 0.3), (0.0, 0.0, 0.16, 0.0), (0.0, 0.0, 0.3, 0.0),
+    (0.08, 0.08, 0.08, 0.08), (0.16, 0.16, 0.16, 0.16),
+)
+
+
+def tune_fields(
+    cal: Calibration,
+    adapter: SportAdapter,
+    frames: list[np.ndarray | None],
+    engine: OcrEngine,
+    reference: np.ndarray | None,
+    mask: np.ndarray | None,
+) -> list[str]:
+    """Pull in boxes that read poorly until they read, and say which ones moved.
+
+    A detected box that reaches a hair into a border line, a logo or the next field reads
+    as nothing, or as an extra digit. Each field that fails on the sampled frames is read
+    again with its box pulled in a little at the top and bottom, at the sides, or both;
+    the smallest change that reads best wins. Scores must also never go down across the
+    frames, which are in time order, so a box that clips "129" to "29" does not win.
+    """
+    shaped = [f for f in frames if f is not None]
+    if not shaped or not cal.fields:
+        return []
+    fh, fw = shaped[0].shape[:2]
+    full = make_reader(cal, adapter, fw, fh, engine, reference, mask)
+    x, y, w, h = full.roi
+    crops = [f[y : y + h, x : x + w] for f in shaped]
+    if reference is not None:
+        crops = [c for c in crops if full.similarity(c) >= VISIBLE_THRESHOLD]
+    if len(crops) < 2:
+        return []
+    specs = {s.name: s for s in adapter.bug_fields}
+
+    def score(name: str, box: Box) -> tuple[int, int]:
+        """(clean reads, -order violations) for one field over the frames that show the bug."""
+        reader = BugReader(tuple(cal.bug), {name: box}, adapter.bug_fields, fw, fh, None)
+        if name not in reader.field_px:
+            return (-1, 0)
+        images = [prepare_field(reader.field_crop(c, name)) for c in crops]
+        values = []
+        for text, _conf in engine.recognize(images, [CHARSETS[specs[name].charset]] * len(images)):
+            value = parse_field(name, text.strip())
+            if value is not None:
+                values.append(value)
+        drops = sum(1 for a, b in zip(values, values[1:], strict=False) if b < a) if name.endswith("_score") else 0
+        return len(values), -drops
+
+    notes: list[str] = []
+    for name in [s.name for s in adapter.bug_fields if s.name in cal.fields]:
+        box = tuple(cal.fields[name])
+        best_box, best = box, score(name, box)
+        if best[0] >= 0.8 * len(crops) and best[1] == 0:
+            continue
+        bw, bh = box[2] - box[0], box[3] - box[1]
+        for top, bottom, left, right in TUNE_SHRINKS:
+            cand = (box[0] + left * bw, box[1] + top * bh, box[2] - right * bw, box[3] - bottom * bh)
+            got = score(name, cand)
+            if got > best:  # more clean reads first, then fewer scores going backwards
+                best_box, best = cand, got
+        if best_box != box:
+            cal.fields[name] = [round(v, 5) for v in best_box]
+            notes.append(f"The {name.replace('_', ' ')} box was pulled in so it reads cleanly.")
+    return notes
 
 
 def recalibrate_manual(

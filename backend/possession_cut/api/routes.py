@@ -36,6 +36,7 @@ from ..pipeline.matching import load_sidecar, sides_of
 from ..pipeline.ocr import get_engine
 from ..pipeline.probe import Probe, ProbeError, probe_file
 from ..pipeline.window import biggest_run_start
+from ..preview import preview_state, proxy_path
 from ..sports import PlayByPlayUnavailable, available_sports, get_adapter
 from ..worker.inbox import VIDEO_EXTENSIONS, is_video
 from ..worker.runner import job_dir, load_calibration, save_calibration
@@ -61,18 +62,13 @@ def _job_or_404(s, job_id: int) -> Job:
 
 
 def _proxy_path(job_id: int) -> Path:
-    return get_settings().scratch_path(job_id) / "proxy.mp4"
+    return proxy_path(job_id)
 
 
 def _local_only() -> None:
     """Refuse what only makes sense when the engine is on the user's own computer."""
     if get_settings().hosted:
         raise HTTPException(403, "Not available on a hosted copy. Upload the file instead.")
-
-
-def _media_ready(job: Job) -> bool:
-    probe = job.probe or {}
-    return bool(probe.get("browser_playable")) or _proxy_path(job.id).exists()
 
 
 def job_out(job: Job) -> dict[str, Any]:
@@ -106,7 +102,7 @@ def job_out(job: Job) -> dict[str, Any]:
         "calibration": {k: cal.get(k) for k in ("confidence", "source", "confirmed", "template_name", "teams",
                                                 "broadcaster", "warnings", "crop", "bug")} if cal else None,
         "summary": summary or None,
-        "media_ready": _media_ready(job) if job.id else False,
+        **(preview_state(job.id, probe) if job.id else {"media_ready": False, "media_source": None, "preview": None}),
         "claude_spent_usd": round(job.claude_spent_usd or 0.0, 4),
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,

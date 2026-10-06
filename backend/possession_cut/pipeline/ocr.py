@@ -176,6 +176,29 @@ def get_engine(threads: int = 1) -> OcrEngine:
 # -- image preparation ---------------------------------------------------------
 
 
+def drop_rules(binary: np.ndarray) -> np.ndarray:
+    """Blank out line-like ink: a bug's border, a row of timeout dashes, an underline.
+
+    A box that reaches a hair past its text picks these up, and the recognizer then sees
+    a long bar with small digits beside it and reads nothing. Lines are far wider than
+    tall, or hug a side of the box as a thin vertical; glyphs are neither (a colon's dots
+    are square, a "1" is a good deal wider than a hairline).
+    """
+    ink = (binary < 128).astype(np.uint8)
+    if not ink.any():
+        return binary
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    height, width = binary.shape[:2]
+    out = binary.copy()
+    for i in range(1, n):
+        x, y, w, h = (int(v) for v in stats[i][:4])
+        flat = w >= 3 * h and h <= 0.25 * height
+        side_bar = (x == 0 or x + w == width) and w <= 0.12 * h
+        if flat or side_bar:
+            out[labels == i] = 255
+    return out
+
+
 def prepare_field(crop: np.ndarray, scale: int = 3, binarize: bool = True) -> np.ndarray:
     """Upscale 3x, normalize polarity to dark text on a light ground, binarize, pad.
 
@@ -194,6 +217,7 @@ def prepare_field(crop: np.ndarray, scale: int = 3, binarize: bool = True) -> np
         # a blank field has no real foreground; Otsu would split noise. Detect via contrast.
         if float(gray.max()) - float(gray.min()) < 40:
             out = np.full_like(gray, 255)
+        out = drop_rules(out)
         out = cv2.GaussianBlur(out, (3, 3), 0)
     else:
         lo, hi = np.percentile(gray, (2, 98))

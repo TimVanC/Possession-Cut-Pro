@@ -111,7 +111,13 @@ export default function Review() {
   const job = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => api.job(jobId),
-    refetchInterval: (q) => (q.state.data?.busy ? 1500 : false),
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (d?.busy) return 1500;
+      // a preview copy on its way: pick it up when it lands
+      if (d?.preview?.wanted && !d.preview.ready && !d.preview.failed) return 10_000;
+      return false;
+    },
   });
   const live = useJobEvents(jobId, !!job.data?.busy);
   const analyzing = job.data?.status === "analyzing";
@@ -205,6 +211,14 @@ export default function Review() {
     if (ready) seek(clips[0].segments[0][0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
+
+  // the preview copy landed: the player reloads with it, so put it back on the selected clip
+  const mediaSource = job.data?.media_source ?? "source";
+  useEffect(() => {
+    const clip = state.current.current;
+    if (ready && clip) seek(clip.segments[0][0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mediaSource]);
 
   const togglePlay = useCallback(() => {
     const v = video.current;
@@ -471,8 +485,9 @@ export default function Review() {
             <div className="absolute inset-x-0 overflow-hidden" style={{ top: `${((1 - videoShare) / 2) * 100}%`, height: `${videoShare * 100}%` }}>
               {j.media_ready ? (
                 <video
+                  key={j.media_source ?? "source"}
                   ref={video}
-                  src={url(`/api/media/${jobId}/source`)}
+                  src={url(`/api/media/${jobId}/source?v=${j.media_source ?? "source"}`)}
                   preload="auto"
                   playsInline
                   className="absolute max-w-none"
@@ -488,6 +503,15 @@ export default function Review() {
               )}
             </div>
           </div>
+
+          {j.preview?.wanted && !j.preview.ready && !j.preview.failed && (
+            <p className="w-full max-w-md text-center text-xs text-ink-400">
+              {j.preview.building
+                ? `Preparing a smoother preview copy, ${Math.round((j.preview.progress ?? 0) * 100)}% done.`
+                : "A smoother preview copy is queued."}
+              {j.media_source === "source" && " Until then the original plays, and jumps between clips can take a moment."}
+            </p>
+          )}
 
           {current && (
             <div className="w-full max-w-md space-y-2">

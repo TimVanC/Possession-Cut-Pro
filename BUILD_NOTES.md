@@ -123,6 +123,66 @@ frames of the export. I did not watch the cut at speed and did not listen to it.
 - **The caption bar** says "NYK leads 3-1", the series after this game. The bug in the
   picture says 2-1, the series before it.
 
+## The second real game (2016 Finals Game 7, Cavs at Warriors, on the hosted copy)
+
+You ran this one yourself on Railway on 2026-10-06 and reported a poor cut, a lagging
+player, and only Cavs clips although "Opponent scores" was on. I could not open your job
+(I do not sign in to the hosted copy), so I read the server's logs and ran the same file,
+ESPN's 720p "FULL GAME" upload from your Downloads folder (1.2 GB, 1:47:34, 1.5 Mbit/s),
+through the pipeline here exactly as the server would: no Claude, fresh detection.
+
+**What went wrong, in order.**
+
+1. **The game lookup failed.** You searched 2026-06-19 (the game is 2016-06-19), and at
+   that moment the server was still running the build from before the ESPN fallback, so
+   the lookup waited 50 s on NBA.com and answered "unavailable". The job went on without a
+   game: no play-by-play, no scorer names, no cross-check. The setup page now notices a
+   year in the file name that differs from the date ("The file name mentions 2016") and
+   offers to switch, and the hosted copy no longer tries NBA.com at all.
+2. **The Warriors' score box read as nothing.** The built-in detector put the home score
+   box one row too tall, so it took in the bar's white top line. The recognizer then saw a
+   long bar with two small digits under it and returned an empty string, in every frame.
+   No Warriors score changes means no Warriors clips; "Opponent scores" had nothing to
+   add. The clock box ran into the shot clock beside it the same way and read "5:5716".
+   The calibration screen did warn ("Needs a manual check", scores read in under 70%),
+   but the boxes looked right at a glance, and nothing said which one was broken.
+3. **The player lagged** because the review screen streamed the original file from
+   Railway: 896 range requests in nineteen minutes, each a second or so, and a keyframe
+   only every six seconds in that file, so every jump to a clip waited for the next
+   keyframe to come over the internet.
+
+**What changed.**
+
+- Field reads drop line-like ink before recognizing (a border, timeout dashes, an
+  underline), box padding stops at a line above or below the text as it already did at
+  artwork beside it, and a box snapped along the row may not reach into the next field's
+  text. On top of that, calibration now pulls in any box that still reads poorly, trying
+  a few smaller boxes and keeping the smallest that reads cleanly (scores must also never
+  go down across the sampled frames). The 2016 file now calibrates at confidence 1.0
+  with every field read in every frame, against 0.0 before.
+- The analysis names the side when one score box is the problem: "GS's score could not
+  be read in 93% of live samples, so its baskets are mostly missing. Fix the home score
+  box in calibration and analyze again."
+- A hosted copy makes a small preview copy of every upload in the background (480 tall,
+  a keyframe every second, ~0.7 Mbit/s) from the moment the file is probed, and the
+  review screen plays that. Until it is ready the original plays and the page says so;
+  when it lands the player switches to it on the selected clip. On your own computer
+  nothing changes: a playable file plays as it is, as before.
+
+**The cut, with the game attached and both teams.** 94 score changes found, all 94
+matched to the play-by-play (93 by the clock), none unmatched; two early plays in the
+play-by-play have no counterpart in the video, which is normal for ESPN's "full game"
+uploads, which trim dead time. Clock readable in 98.6% of live samples and both scores in
+97.2%. 76 clips: 41 Cavs, 35 Warriors, every one with a scorer. Before the fixes the same
+file gave 72 clips with 22 phantom Warriors plays, a clock readable 7% of the time, and
+free throws of one point everywhere.
+
+**What to do on the hosted copy.** Deploying this build wipes the uploaded file, so
+upload it again, search the game with the date 2016-06-19, pick CLE, turn on "Opponent
+scores", and let calibration run. Setting `ANTHROPIC_API_KEY` on the Railway service
+(Variables) is still worth doing: Claude vision reads unusual layouts better than the
+built-in detector and writes the captions. The cut you reviewed was made without it.
+
 ## Things I did differently from what was asked
 
 You asked to be told afterwards.
@@ -195,7 +255,18 @@ You asked to be told afterwards.
 - **Field edges come from ink, not from text boxes.** Along the bug's main row, a column
   that never has ink in any frame is a gap between fields. That is what separates
   "7:52" from "13" when the detector fuses them.
-- **Score boxes are padded for a third digit, but padding stops at artwork** such as a logo.
+- **Score boxes are padded for a third digit, but padding stops at artwork** such as a logo,
+  and (since the 2016 Finals test) at a line above or below the text, such as the bug's
+  border or a row of timeout dashes.
+- **Line-like ink is dropped before recognizing.** A border or an underline that gets into
+  a box made the recognizer return nothing for the whole field; now wide flat shapes and
+  thin bars on a box's edge are blanked first. A colon's dots and a "1" are not affected.
+- **A box may not reach into its neighbour's text.** Ink runs fuse a game clock and the
+  shot clock when the two panels touch; the clock box stops where the shot clock's text begins.
+- **Boxes that still read poorly are pulled in automatically**: a few smaller boxes are
+  tried on the sampled frames and the smallest that reads cleanly wins. Scores must not go
+  down across frames, so a box that clips "129" to "29" does not win. Manual boxes are
+  never touched.
 - **Bug visibility is image similarity against the template**, judged on the better half
   of six slices, so a score animation over one team does not count as "bug hidden".
 - **Crop guard beyond the PRD rule.** The rule (full height, width = bug width / 0.78,
@@ -450,7 +521,15 @@ light use is 5 to 10 dollars a month; I have not measured it. Do not turn on Rai
 
 **What changes compared with running it at home.** Uploads go over your internet
 connection: roughly 20 to 70 minutes for 5 GB on typical home upload speeds, against
-about a minute locally. Analysis speed on Railway is unknown until a game runs there.
+about a minute locally. Analysis ran at about 70x real time on the 2016 game (1:47 of
+video in 90 s).
+
+**The review player on a server plays a preview copy**, not the upload: 480 tall with a
+keyframe every second, made in the background by the worker from the moment the file is
+probed, with three encoder threads so a calibration or analysis alongside it is barely
+slowed. A full game takes some minutes to encode; until it is ready the page plays the
+original and says so, then switches. The copy sits on the temporary disk with the upload
+and goes with it. If an encode fails, the page says why and the original keeps playing.
 
 ## Vercel
 

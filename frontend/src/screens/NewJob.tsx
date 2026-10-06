@@ -15,6 +15,12 @@ function dateFromName(name: string): string | null {
   return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
 }
 
+/** A bare year in the file name ("2016 NBA Finals Game 7"): enough to catch a date typed with the wrong year. */
+function yearFromName(name: string): string | null {
+  const m = /(?:^|\D)((?:19|20)\d{2})(?:\D|$)/.exec(name);
+  return m ? m[1] : null;
+}
+
 export default function NewJob() {
   const { id } = useParams();
   const jobId = id ? Number(id) : null;
@@ -83,6 +89,7 @@ export default function NewJob() {
   const sportInfo = sports.data?.find((s) => s.key === sport);
   const fileName = sourcePath.split(/[\\/]/).pop() ?? "";
   const nameDate = dateFromName(fileName);
+  const nameYear = yearFromName(fileName);
 
   const games = useQuery({
     queryKey: ["games", searched],
@@ -254,11 +261,21 @@ export default function NewJob() {
             often wrong about the year, so check the result).
           </p>
         )}
+        {!nameDate && nameYear && date && date.slice(0, 4) !== nameYear && (
+          <p className="mt-2 text-xs text-ink-400">
+            The file name mentions {nameYear}, but this date is in {date.slice(0, 4)}.{" "}
+            <button className="underline hover:text-ink-100" onClick={() => setDate(`${nameYear}${date.slice(4)}`)}>
+              Use {nameYear}
+            </button>
+          </p>
+        )}
 
         <div className="mt-4">
           {games.isFetching && <Spinner />}
           {games.error && <Note tone="error">{(games.error as Error).message}</Note>}
-          {games.data && games.data.length === 0 && <Note>No games found on {searched?.date}{searched?.team ? ` for ${searched.team}` : ""}.</Note>}
+          {games.data && games.data.length === 0 && (
+            <Note>No games found on {searched?.date}{searched?.team ? ` for ${searched.team}` : ""}. For an older game, check the year.</Note>
+          )}
           {games.data && games.data.length > 0 && (
             <ul className="divide-y divide-ink-800 overflow-hidden rounded-lg border border-ink-800">
               {games.data.map((g) => {

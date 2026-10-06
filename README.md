@@ -38,7 +38,7 @@ then starts quietly in the background every time you log in, and the page just w
 1. **Upload.** Drop the game file on the page or click to choose it. MP4, MKV or TS, 480p or better. A 5 GB game takes about a minute. If the upload is interrupted it resumes where it stopped.
    If the file is already on the computer running the engine you can pick it from disk instead and skip the copy, or drop it in `inbox/`.
 2. **Game setup.** Pick the sport, find the game by date, choose the team to follow, and choose where the cut starts: the start of the game, a game time (Q3 2:26), or automatically at the team's largest deficit.
-3. **Calibrate.** The app finds the score bug and shows what it reads in each field. Drag the boxes if anything is off, then confirm. The layout is saved as a broadcaster template and reused next time.
+3. **Calibrate.** The app finds the score bug and shows what it reads in each field. A box that reads poorly is pulled in automatically until it reads; drag the boxes if anything is still off, then confirm. The layout is saved as a broadcaster template and reused next time.
 4. **Analyze.** A 2.5 hour broadcast takes roughly 5 to 10 minutes.
 5. **Review.** Every clip with its score, scorer and confidence. Toggle clips off, nudge in and out points, watch the whole cut in sequence.
 
@@ -139,6 +139,10 @@ What to know:
   deploying new code. A plan with a bigger volume can point `UPLOADS_DIR` at `/data/uploads`.
 - **Old exports are removed to make room** when the volume is nearly full. Download the
   ones you want to keep.
+- **The review player plays a small preview copy** (480 tall, a keyframe every second)
+  that the worker makes in the background as soon as a game is uploaded, so jumping
+  between clips over the internet is quick. Until it is ready the original plays and the
+  page says so.
 - **Deploying new code.** In Railway press Ctrl+K and choose **Deploy Latest Commit**.
   For pushes to deploy by themselves, the Railway GitHub App needs access to the
   repository (GitHub, Settings, Applications, Railway, Configure). Only changes under

@@ -17,6 +17,7 @@ from ..config import get_settings
 from ..db import Export, Job, get_engine, session_scope, touch, utcnow
 from .inbox import POLL_SECONDS, InboxWatcher
 from .janitor import sweep
+from .preview import preview_loop
 from .runner import PREVIOUS_STATUS, TASKS, Cancelled, job_dir
 
 log = logging.getLogger("possession_cut.worker")
@@ -150,6 +151,7 @@ def main() -> int:
     stop = threading.Event()
     threading.Thread(target=_inbox_loop, args=(stop,), daemon=True, name="inbox").start()
     threading.Thread(target=_janitor_loop, args=(stop,), daemon=True, name="janitor").start()
+    threading.Thread(target=preview_loop, args=(stop,), daemon=True, name="preview").start()
     log.info("worker ready (analysis workers: %d, sample fps: %s, inbox: %s)",
              settings.workers, settings.ocr_sample_fps, settings.inbox_path)
     beat = threading.Thread(target=_heartbeat_loop, args=(stop,), daemon=True, name="heartbeat")

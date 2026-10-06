@@ -570,7 +570,9 @@ class LocalDetector:
         text_height = clock_cluster.box[3] - clock_cluster.box[1]
         observations = self.fine_text(visible, bug, text_height=text_height)
         roles, teams, clusters, role_notes = self.assign_roles(observations, field_names, expected_teams)
+        text_boxes = dict(roles)
         roles = self.snap_to_ink(roles, self.ink_runs(visible, bug, clock_cluster.box))
+        roles = separate_fields(roles, text_boxes)
         inside, outside = self.static_scores(static, bug)
         return LocalDetection(visible, bug, roles, teams, clusters, inside, outside, notes + role_notes)
 
@@ -644,6 +646,7 @@ def size_field_boxes(
             if ox0 >= x1:
                 right = min(right, (ox0 - x1) // 2)
         left, right = min(left, x0 - bx0), min(right, bx1 - x1)
+        top, bottom = min(pad_y, y0 - by0), min(pad_y, by1 - y1)
         if gray is not None:
             rows = gray[max(0, y0 - by0) : max(1, y1 - by0)]
             grad = np.abs(np.diff(rows, axis=1)).mean(axis=0)
@@ -651,8 +654,36 @@ def size_field_boxes(
             lx, rx = max(0, x0 - bx0 - 2), min(gray.shape[1] - 1, x1 - bx0 + 1)
             left = min(left, 2 + _free_run(grad, lx, -1, max(0, left - 2)))
             right = min(right, 2 + _free_run(grad, rx, +1, max(0, right - 2)))
-        box = (x0 - max(0, left), max(y0 - pad_y, by0), x1 + max(0, right), min(y1 + pad_y, by1))
+            # the same above and below: the bug's border line or a row of timeout dashes
+            # must stay out of the box, or the recognizer sees a bar instead of digits
+            cols = gray[:, max(0, x0 - bx0) : max(1, x1 - bx0)]
+            vgrad = np.abs(np.diff(cols, axis=0)).mean(axis=1)
+            ty, bya = max(0, y0 - by0 - 2), min(gray.shape[0] - 1, y1 - by0 + 1)
+            top = min(top, 2 + _free_run(vgrad, ty, -1, max(0, top - 2)))
+            bottom = min(bottom, 2 + _free_run(vgrad, bya, +1, max(0, bottom - 2)))
+        box = (x0 - max(0, left), y0 - max(0, top), x1 + max(0, right), y1 + max(0, bottom))
         out[name] = from_px(box, frame_w, frame_h)
+    return out
+
+
+def separate_fields(snapped: dict[str, Box], text: dict[str, Box]) -> dict[str, Box]:
+    """Keep a snapped box out of its neighbours' text.
+
+    Ink runs fuse a game clock and the shot clock beside it when the two panels touch,
+    and the clock box then reads "5:5716". Along its row a box may only grow up to where
+    the next field's own text begins.
+    """
+    out: dict[str, Box] = {}
+    for name, (x0, y0, x1, y1) in snapped.items():
+        tx0, ty0, tx1, ty1 = text.get(name, (x0, y0, x1, y1))
+        for other, (ox0, oy0, ox1, oy1) in text.items():
+            if other == name or oy1 <= ty0 or oy0 >= ty1:
+                continue  # a different row
+            if ox0 >= tx1 and x1 > ox0:
+                x1 = ox0
+            if ox1 <= tx0 and x0 < ox1:
+                x0 = ox1
+        out[name] = (x0, y0, x1, y1)
     return out
 
 

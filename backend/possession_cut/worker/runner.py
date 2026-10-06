@@ -26,6 +26,7 @@ from ..pipeline.calibration import Calibration, calibrate
 from ..pipeline.export import make_proxy, plan_export, render, render_overlay, write_cutlist
 from ..pipeline.ocr import get_engine
 from ..pipeline.probe import Probe, probe_file
+from ..preview import part_path, proxy_path
 from ..sports import get_adapter
 from .janitor import make_room
 
@@ -173,9 +174,10 @@ def run_analyze(job_id: int) -> None:
     if ctx.should_stop():
         raise Cancelled()
 
-    # a source the browser cannot play needs a preview copy for the review screen
-    proxy = settings.scratch_path(job_id) / "proxy.mp4"
-    if not probe.browser_playable and not proxy.exists():
+    # a source the browser cannot play needs a preview copy for the review screen (the
+    # worker's preview thread usually has one under way already; then leave it to that)
+    proxy = proxy_path(job_id)
+    if not probe.browser_playable and not proxy.exists() and not part_path(job_id).exists():
         ctx.progress(0.93, "proxy", "Preparing a preview copy", force=True)
         try:
             make_proxy(probe, proxy, progress=lambda f, m: ctx.progress(0.93 + 0.06 * f, "proxy", m),
