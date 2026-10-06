@@ -218,7 +218,9 @@ def test_full_flow(app_env):
     cutlist = json.loads(Path(export["cutlist_path"]).read_text(encoding="utf-8"))
     assert cutlist["title"] == "Knicks comeback vs Spurs" and len(cutlist["clips"]) == 2
     assert {"src_in", "src_out", "game_clock", "score_after", "scorer", "confidence"} <= set(cutlist["clips"][0])
-    assert Path(export["caption_path"]).read_text(encoding="utf-8").strip() == caption.strip()
+    sidecar = Path(export["caption_path"]).read_text(encoding="utf-8")
+    assert sidecar.startswith(caption.strip()) and "\nTimestamps\n0:00 " in sidecar, "the caption, then the chapter list"
+    assert export["settings"]["timestamps"].startswith("0:00 ") and export["settings"]["timestamps"].count("\n") == 1
 
     # -- a second job on the same broadcast reuses the template
     j2 = client.post("/api/jobs", json={"source_path": str(video), "team": "home"}).json()
