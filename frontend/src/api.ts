@@ -289,6 +289,8 @@ export const api = {
   nudgeClips: (jobId: number, body: { edge: "in" | "out"; delta: number; only_enabled?: boolean }) =>
     request<Clip[]>(`/api/jobs/${jobId}/clips/nudge`, { method: "POST", body: JSON.stringify(body) }),
   resetClips: (jobId: number) => request<Clip[]>(`/api/jobs/${jobId}/clips/reset`, { method: "POST" }),
+  bulkClips: (jobId: number, updates: { id: number; enabled?: boolean; src_in?: number; src_out?: number }[]) =>
+    request<Clip[]>(`/api/jobs/${jobId}/clips/bulk`, { method: "POST", body: JSON.stringify({ updates }) }),
 
   startExport: (id: number, body: { title: string; caption: string; audio_crossfade: boolean; options?: Record<string, unknown> }) =>
     request<ExportRecord>(`/api/jobs/${id}/export`, json(body)),

@@ -752,6 +752,38 @@ def nudge_clips(job_id: int, body: ClipsNudge) -> list[dict]:
         return [clip_out(c) for c in clips]
 
 
+class ClipEdit(BaseModel):
+    id: int
+    enabled: bool | None = None
+    src_in: float | None = None
+    src_out: float | None = None
+
+
+class ClipsBulk(BaseModel):
+    updates: list[ClipEdit] = Field(max_length=2000)
+
+
+@router.post("/jobs/{job_id}/clips/bulk")
+def bulk_clips(job_id: int, body: ClipsBulk) -> list[dict]:
+    """Several clip edits in one request: what the page's undo, redo and "turn these off"
+    send. Every id must belong to the job."""
+    with session_scope() as s:
+        job = _job_or_404(s, job_id)
+        duration = float((job.probe or {}).get("duration") or 1e12)
+        clips = s.exec(select(Clip).where(Clip.job_id == job_id).order_by(Clip.order)).all()
+        by_id = {c.id: c for c in clips}
+        for edit in body.updates:
+            clip = by_id.get(edit.id)
+            if clip is None:
+                raise HTTPException(404, f"Clip {edit.id} is not part of this job.")
+            if edit.enabled is not None:
+                clip.enabled = edit.enabled
+            _move_edges(clip, duration, edit.src_in, edit.src_out)
+            s.add(clip)
+        s.flush()
+        return [clip_out(c) for c in clips]
+
+
 @router.post("/jobs/{job_id}/clips/reset")
 def reset_clips(job_id: int) -> list[dict]:
     """Every clip back to its detected in and out points. Which clips are on is left alone."""

@@ -180,6 +180,8 @@ export interface Clip {
   confidence: number;
   pbp_event_id: string | null;
   warnings: string[];
+  /** Each score change inside the clip: when the bug showed it, and how clearly it read. */
+  events: { t: number; points: number; team: "away" | "home"; clock: number | null; period: number | null; confidence?: number }[];
   thumbnail: string | null;
   edited: boolean;
 }

@@ -99,12 +99,12 @@ export function TaskProgress({
   );
 }
 
-export function ConfidenceBadge({ value }: { value: number }) {
+export function ConfidenceBadge({ value, title }: { value: number; title?: string }) {
   const pct = Math.round(value * 100);
   const tone =
     value >= 0.85 ? "text-emerald-300 bg-emerald-950" : value >= 0.65 ? "text-amber-300 bg-amber-950" : "text-red-300 bg-red-950";
   return (
-    <span className={`num rounded px-1.5 py-0.5 text-[11px] font-semibold ${tone}`} title="Confidence in this clip">
+    <span className={`num rounded px-1.5 py-0.5 text-[11px] font-semibold ${tone}`} title={title ?? "Confidence in this clip"}>
       {pct}%
     </span>
   );

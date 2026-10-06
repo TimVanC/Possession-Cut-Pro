@@ -178,6 +178,18 @@ def test_full_flow(app_env):
     assert [c["enabled"] for c in back] == [c["enabled"] for c in before], "which clips are on is untouched"
     assert all(not c["edited"] for c in back) and back[0]["src_in"] == before[0]["src_in"]
 
+    # several edits in one request (what undo and "turn these off" send); a stranger's id is refused
+    a, b = back[0], back[1]
+    bulk = client.post(
+        f"/api/jobs/{jid}/clips/bulk",
+        json={"updates": [{"id": a["id"], "enabled": False, "src_in": a["src_in"] + 1.0}, {"id": b["id"], "src_out": b["src_out"] - 1.0}]},
+    ).json()
+    assert len(bulk) == len(back)
+    assert not bulk[0]["enabled"] and bulk[0]["src_in"] == pytest.approx(a["src_in"] + 1.0)
+    assert bulk[1]["enabled"] and bulk[1]["src_out"] == pytest.approx(b["src_out"] - 1.0)
+    assert client.post(f"/api/jobs/{jid}/clips/bulk", json={"updates": [{"id": 999999, "enabled": True}]}).status_code == 404
+    client.post(f"/api/jobs/{jid}/clips/bulk", json={"updates": [{"id": a["id"], "enabled": True, "src_in": a["src_in"]}, {"id": b["id"], "src_out": b["src_out"]}]})
+
     # the source streams with HTTP range support
     part = client.get(f"/api/media/{jid}/source", headers={"Range": "bytes=100-299"})
     assert part.status_code == 206 and len(part.content) == 200

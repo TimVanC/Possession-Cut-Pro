@@ -204,7 +204,8 @@ def run_analyze(job_id: int) -> None:
                     points=c.points, kind=c.kind, scorer=c.scorer, description=c.description,
                     confidence=c.confidence, enabled=True, pbp_event_id=c.pbp_event_id,
                     warnings=list(c.warnings),
-                    events=[{"t": ch.t, "points": ch.points, "team": ch.team, "clock": ch.clock, "period": ch.period}
+                    events=[{"t": ch.t, "points": ch.points, "team": ch.team, "clock": ch.clock, "period": ch.period,
+                             "confidence": round(float(getattr(ch, "confidence", 1.0)), 3)}
                             for ch in c.changes],
                     thumbnail=str(thumb) if thumb.exists() else "",
                 )
