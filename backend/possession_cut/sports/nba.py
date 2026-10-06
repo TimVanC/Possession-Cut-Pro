@@ -7,6 +7,12 @@ Play-by-play sources, tried in order and cached per game ID:
 
 Game lookup uses stats.nba.com scoreboardv3 by date, which carries teams, final scores
 and labels ("NBA Finals", "NYK leads 3-1") for any season.
+
+NBA.com refuses requests from cloud servers: stats.nba.com stalls and cdn.nba.com answers
+403. ESPN's public game data does not, so when NBA.com fails the lookup falls back to
+ESPN's scoreboard, and a game found there (id ``espn:<event>``) gets its play-by-play
+from ESPN's game summary. Team codes are translated to the NBA's so nothing downstream
+can tell the difference.
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
+import time
 from typing import TYPE_CHECKING
 
 from . import http
@@ -33,6 +40,117 @@ STATS_HEADERS = {
 CDN_PBP = "https://cdn.nba.com/static/json/liveData/playbyplay/playbyplay_{game_id}.json"
 STATS_PBP = "https://stats.nba.com/stats/playbyplayv3"
 STATS_SCOREBOARD = "https://stats.nba.com/stats/scoreboardv3"
+ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+ESPN_SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+ESPN_PREFIX = "espn:"
+# ESPN's team codes where they differ from the NBA's
+ESPN_TRICODES = {"SA": "SAS", "NY": "NYK", "GS": "GSW", "NO": "NOP", "UTAH": "UTA", "WSH": "WAS"}
+# After NBA.com fails once it is left alone for this long; ESPN is used meanwhile.
+NBA_COM_RETRY_SECONDS = 600.0
+_nba_com_down_until = 0.0
+
+
+def _nba_com_reachable() -> bool:
+    return time.time() >= _nba_com_down_until
+
+
+def _nba_com_failed(reason: str) -> None:
+    global _nba_com_down_until
+    _nba_com_down_until = time.time() + NBA_COM_RETRY_SECONDS
+    log.info("NBA.com unavailable (%s); using ESPN's data for the next %d minutes", reason, NBA_COM_RETRY_SECONDS // 60)
+
+
+def espn_tricode(abbreviation: str | None) -> str:
+    code = (abbreviation or "").upper()
+    return ESPN_TRICODES.get(code, code)
+
+
+def _initial_name(full: str) -> str:
+    """'Karl-Anthony Towns' -> 'K. Towns', the shape NBA.com uses."""
+    parts = full.split()
+    return f"{parts[0][0]}. {' '.join(parts[1:])}" if len(parts) >= 2 else full
+
+
+def games_from_espn(data: dict, date: str) -> list[Game]:
+    games: list[Game] = []
+    for ev in data.get("events") or []:
+        comp = (ev.get("competitions") or [{}])[0]
+        by_side = {c.get("homeAway"): c for c in comp.get("competitors") or []}
+        home, away = by_side.get("home") or {}, by_side.get("away") or {}
+        status = ((comp.get("status") or {}).get("type") or {}).get("description") or ""
+        label = " · ".join(n.get("headline") for n in comp.get("notes") or [] if n.get("headline"))
+        games.append(
+            Game(
+                game_id=f"{ESPN_PREFIX}{ev.get('id')}",
+                date=date,
+                away=espn_tricode((away.get("team") or {}).get("abbreviation")),
+                home=espn_tricode((home.get("team") or {}).get("abbreviation")),
+                away_name=(away.get("team") or {}).get("displayName") or "",
+                home_name=(home.get("team") or {}).get("displayName") or "",
+                away_score=_int(away.get("score")),
+                home_score=_int(home.get("score")),
+                status=status,
+                label=label,
+            )
+        )
+    return games
+
+
+def normalize_espn_plays(summary: dict) -> list[ScoringEvent]:
+    """Scoring events from an ESPN game summary, in the same shape as NBA.com's.
+
+    Points come from the running score, as with NBA.com, so the two sources agree play
+    for play (a test holds them to that on a real game).
+    """
+    comp = ((summary.get("header") or {}).get("competitions") or [{}])[0]
+    side_of: dict[str, str] = {}
+    code_of: dict[str, str] = {}
+    for c in comp.get("competitors") or []:
+        team_id = str((c.get("team") or {}).get("id") or c.get("id") or "")
+        side_of[team_id] = c.get("homeAway") or ""
+        code_of[team_id] = espn_tricode((c.get("team") or {}).get("abbreviation"))
+    events: list[ScoringEvent] = []
+    home = away = 0
+    for play in summary.get("plays") or []:
+        if not play.get("scoringPlay"):
+            continue
+        new_home, new_away = _int(play.get("homeScore")), _int(play.get("awayScore"))
+        if new_home is None or new_away is None:
+            continue
+        d_home, d_away = new_home - home, new_away - away
+        if d_home <= 0 and d_away <= 0:
+            home, away = max(home, new_home), max(away, new_away)
+            continue
+        side = "home" if d_home > 0 else "away"
+        team_id = str((play.get("team") or {}).get("id") or "")
+        team = code_of.get(team_id) or next((code for tid, code in code_of.items() if side_of.get(tid) == side), "")
+        kind_text = ((play.get("type") or {}).get("text") or "").lower()
+        text = (play.get("text") or "").strip()
+        is_ft = "free throw" in kind_text or "free throw" in text.lower()
+        scorer = _initial_name(text.split(" makes ", 1)[0].strip()) if " makes " in text else ""
+        events.append(
+            ScoringEvent(
+                event_id=str(play.get("id") or play.get("sequenceNumber") or len(events)),
+                period=int((play.get("period") or {}).get("number") or 0),
+                clock=http.parse_iso_clock((play.get("clock") or {}).get("displayValue")),
+                team=team,
+                points=d_home if side == "home" else d_away,
+                scorer=scorer,
+                description=text,
+                score_away=new_away,
+                score_home=new_home,
+                kind="free_throw" if is_ft else "field_goal",
+                extra={"side": side, "sub_type": kind_text},
+            )
+        )
+        home, away = new_home, new_away
+    return events
+
+
+def espn_game_finished(summary: dict) -> bool:
+    comp = ((summary.get("header") or {}).get("competitions") or [{}])[0]
+    status = (comp.get("status") or {}).get("type") or {}
+    return bool(status.get("completed")) or status.get("state") == "post"
 
 
 def _int(value) -> int | None:
@@ -150,7 +268,18 @@ class NBAAdapter(SportAdapter):
         cache_name = f"games_{date}.json"
         rows = http.read_cache("nba", cache_name)
         if rows is None:
-            data = http.get_json(STATS_SCOREBOARD, {"GameDate": date, "LeagueID": "00"}, STATS_HEADERS)
+            data = None
+            if _nba_com_reachable():
+                try:
+                    # one short try: on a server this stalls, and the answer is a minute away otherwise
+                    data = http.get_json(STATS_SCOREBOARD, {"GameDate": date, "LeagueID": "00"}, STATS_HEADERS, attempts=1, timeout=8.0)
+                except PlayByPlayUnavailable as exc:
+                    _nba_com_failed(str(exc))
+            if data is None:
+                rows = [g.to_dict() for g in games_from_espn(http.get_json(ESPN_SCOREBOARD, {"dates": date.replace("-", "")}), date)]
+                if rows and all(r["status"].lower().startswith("final") for r in rows):
+                    http.write_cache("nba", cache_name, rows)
+                return self._filter(rows, team)
             rows = []
             for g in (data.get("scoreboard") or {}).get("games", []):
                 away, home = g.get("awayTeam") or {}, g.get("homeTeam") or {}
@@ -171,6 +300,10 @@ class NBAAdapter(SportAdapter):
                 )
             if rows and all(r["status"].lower().startswith("final") for r in rows):
                 http.write_cache("nba", cache_name, rows)
+        return self._filter(rows, team)
+
+    @staticmethod
+    def _filter(rows: list[dict], team: str | None) -> list[Game]:
         games = [Game(**r) for r in rows]
         if team:
             want = team.upper()
@@ -178,10 +311,21 @@ class NBAAdapter(SportAdapter):
         return games
 
     def fetch_pbp(self, game_id: str) -> list[ScoringEvent]:
-        cache_name = f"pbp_{game_id}.json"
+        cache_name = f"pbp_{game_id.replace(':', '_')}.json"  # "espn:" ids; a colon is not a file name on Windows
         cached = http.read_cache("nba", cache_name)
         if cached is not None:
             return [ScoringEvent.from_dict(e) for e in cached["events"]]
+
+        if game_id.startswith(ESPN_PREFIX):
+            summary = http.get_json(ESPN_SUMMARY, {"event": game_id[len(ESPN_PREFIX):]})
+            events = normalize_espn_plays(summary)
+            if not events:
+                raise PlayByPlayUnavailable(f"ESPN has no plays for {game_id}")
+            if espn_game_finished(summary):
+                http.write_cache("nba", cache_name, {"source": "espn", "events": [e.to_dict() for e in events]})
+            return events
+        if not _nba_com_reachable():
+            raise PlayByPlayUnavailable("NBA.com is not answering from this server; pick the game again to use ESPN's data")
 
         errors: list[str] = []
         actions: list[dict] | None = None
@@ -204,6 +348,8 @@ class NBAAdapter(SportAdapter):
             except Exception as exc:  # nba_api raises its own assortment
                 errors.append(f"{label}: {type(exc).__name__}")
         if not actions:
+            if all("ReadTimeout" in e or "403" in e for e in errors):
+                _nba_com_failed("; ".join(errors))
             raise PlayByPlayUnavailable(f"NBA play-by-play for {game_id} is unavailable ({'; '.join(errors)})")
 
         events = normalize_actions(actions)
