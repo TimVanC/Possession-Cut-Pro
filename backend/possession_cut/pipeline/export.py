@@ -331,7 +331,7 @@ def _run(cmd: list[str], total_seconds: float, on_progress: Callable[[float], No
         for line in proc.stdout:
             if should_stop and should_stop():
                 proc.kill()
-                raise ExportError("Export cancelled.")
+                raise InterruptedError("export cancelled")  # a cancel, not a failure
             if line.startswith("out_time_us=") and on_progress:
                 try:
                     done = int(line.split("=", 1)[1]) / 1e6

@@ -224,17 +224,21 @@ def calibrate(
     templates: list | None = None,
     expected_teams: dict[str, str] | None = None,
     progress=None,
+    should_stop=None,
 ) -> tuple[Calibration, np.ndarray | None, np.ndarray | None]:
     """Run calibration for one source file.
 
     Returns the calibration plus the bug reference image and static mask (to be stored
     with the template). Raises CalibrationError only when no frames can be decoded;
     a bug that cannot be found comes back as a low-confidence calibration with warnings
-    so the user can draw the box by hand.
+    so the user can draw the box by hand. ``should_stop`` is asked at every step, and a
+    yes raises InterruptedError (a cancel from the page).
     """
     from . import templates as tmpl
 
     def step(fraction: float, message: str) -> None:
+        if should_stop and should_stop():
+            raise InterruptedError("calibration cancelled")
         if progress:
             progress(fraction, message)
 

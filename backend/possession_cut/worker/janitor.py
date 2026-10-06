@@ -67,14 +67,30 @@ def sweep(now: datetime | None = None) -> dict:
     if settings.export_retention_days > 0:
         limit = now - timedelta(days=settings.export_retention_days)
         with session_scope() as s:
-            old = [e for e in s.exec(select(Export).where(Export.status == "done")).all() if e.path and _aware(e.created_at) < limit]
+            exports = s.exec(select(Export).where(Export.status == "done")).all()
+            old = [e for e in exports if e.path and _aware(e.created_at) < limit]
+            known = {str(Path(e.path).resolve()) for e in s.exec(select(Export)).all() if e.path}
             for export in old:
                 path = Path(export.path)
                 if path.exists():
                     _remove_export_files(path)
                     removed["exports"] += 1
                     log.info("janitor: removed export %s (made %s)", path.name, _aware(export.created_at).date())
+        # videos whose job was deleted have no record left to age them out: go by the file's date
+        if settings.exports_path.is_dir():
+            for path in settings.exports_path.glob("*.mp4"):
+                if str(path.resolve()) in known or not path.is_file():
+                    continue
+                if datetime.fromtimestamp(path.stat().st_mtime, UTC) < limit:
+                    _remove_export_files(path)
+                    removed["exports"] += 1
+                    log.info("janitor: removed export %s (no job refers to it)", path.name)
     return removed
+
+
+def remove_export_files(path: Path) -> None:
+    """The video and its cut list and caption."""
+    _remove_export_files(path)
 
 
 def make_room(need_bytes: int, now: datetime | None = None) -> int:

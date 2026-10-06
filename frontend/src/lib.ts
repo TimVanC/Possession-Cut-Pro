@@ -76,6 +76,18 @@ export const STATUS_TEXT: Record<JobStatus, string> = {
   failed: "Failed",
 };
 
+/** What the owner does next with a job in this state, for the jobs list. */
+export const NEXT_STEP: Record<JobStatus, string> = {
+  draft: "Fill in the game setup",
+  calibrating: "Finding the score bug",
+  ready: "Check the score bug and confirm it",
+  analyzing: "Analyzing the game",
+  review: "Review the clips, then export",
+  exporting: "Rendering the video",
+  done: "Download the video, or review and export again",
+  failed: "See the error below",
+};
+
 /** Where "Open" should take you for a job in a given state. */
 export function jobRoute(job: Pick<Job, "id" | "status" | "calibration">): string {
   switch (job.status) {

@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
 
 from sqlmodel import select
 
@@ -67,6 +68,13 @@ def run_one(job_id: int, task: str) -> None:
     status: str | None = None
     error: str | None = None
     try:
+        with session_scope() as s:
+            job = s.get(Job, job_id)
+            source = job.source_path if job is not None else ""
+        if not Path(source).is_file():
+            # say so at once, in plain words, instead of letting ffmpeg fail on the path
+            where = "this server" if get_settings().hosted else "this computer"
+            raise FileNotFoundError(f"The game file is no longer on {where}. Upload it again to continue.")
         TASKS[task](job_id)
         log.info("job %s: %s finished in %.1fs", job_id, task, time.time() - started)
     except (Cancelled, InterruptedError):
@@ -86,9 +94,12 @@ def run_one(job_id: int, task: str) -> None:
                     if task == "export" and export_id:
                         export = s.get(Export, export_id)
                         if export is not None and export.status != "done":
-                            export.status = "failed"
-                            export.error = error or "cancelled"
-                            s.add(export)
+                            if status == "failed":
+                                export.status = "failed"
+                                export.error = error
+                                s.add(export)
+                            else:
+                                s.delete(export)  # cancelled: nothing to show for it
                     if status == "failed":
                         job.status = "failed"
                         job.error = error

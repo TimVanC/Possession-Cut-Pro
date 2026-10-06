@@ -258,7 +258,8 @@ export const api = {
   createJob: (setup: JobSetup & { source_path: string }) => request<Job>("/api/jobs", json(setup)),
   updateJob: (id: number, setup: Partial<JobSetup>) =>
     request<Job>(`/api/jobs/${id}`, { method: "PATCH", body: JSON.stringify(setup) }),
-  deleteJob: (id: number) => request<{ deleted: number }>(`/api/jobs/${id}`, { method: "DELETE" }),
+  deleteJob: (id: number, exports = false) =>
+    request<{ deleted: number }>(`/api/jobs/${id}${exports ? "?exports=1" : ""}`, { method: "DELETE" }),
   cancelJob: (id: number) => request<Job>(`/api/jobs/${id}/cancel`, { method: "POST" }),
 
   calibrate: (id: number, ignoreTemplates = false) =>

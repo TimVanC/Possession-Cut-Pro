@@ -28,6 +28,7 @@ from .. import __version__
 from ..ai.claude import ClaudeClient
 from ..config import ffmpeg_bin, get_settings, is_allowed_path
 from ..db import Clip, Export, Job, Template, session_scope, touch
+from ..edits import move_edges
 from ..pipeline import templates as tmpl
 from ..pipeline.calibration import Calibration, make_reader, read_frame, recalibrate_manual
 from ..pipeline.frames import FrameError, extract_frame
@@ -39,6 +40,7 @@ from ..pipeline.window import biggest_run_start
 from ..preview import preview_state, proxy_path
 from ..sports import PlayByPlayUnavailable, available_sports, get_adapter
 from ..worker.inbox import VIDEO_EXTENSIONS, is_video
+from ..worker.janitor import remove_export_files
 from ..worker.runner import job_dir, load_calibration, save_calibration
 from .auth import signed_in
 from .progress import progress_view
@@ -398,13 +400,25 @@ def create_job(body: JobCreate) -> dict:
 def list_jobs() -> list[dict]:
     with session_scope() as s:
         jobs = s.exec(select(Job).order_by(Job.created_at.desc())).all()
-        return [job_out(j) for j in jobs]
+        return [_with_exports(s, j) for j in jobs]
+
+
+def _with_exports(s, job: Job) -> dict:
+    """``job_out`` plus the newest finished export and how many there are, for the list
+    and the job page (a Download button where the owner looks first)."""
+    done = s.exec(
+        select(Export).where(Export.job_id == job.id, Export.status == "done").order_by(Export.created_at.desc())
+    ).all()
+    out = job_out(job)
+    out["latest_export"] = export_out(done[0]) if done else None
+    out["export_count"] = len(done)
+    return out
 
 
 @router.get("/jobs/{job_id}")
 def get_job(job_id: int) -> dict:
     with session_scope() as s:
-        return job_out(_job_or_404(s, job_id))
+        return _with_exports(s, _job_or_404(s, job_id))
 
 
 @router.patch("/jobs/{job_id}")
@@ -428,11 +442,13 @@ def update_job(job_id: int, body: JobUpdate) -> dict:
 
 
 @router.delete("/jobs/{job_id}")
-def delete_job(job_id: int) -> dict:
-    """Removes the job record and its artifacts. Exports stay, and so does a source file
-    the user pointed at on their own disk. A file the app received by upload is the app's
-    own copy and goes with the job, unless another job still uses it."""
+def delete_job(job_id: int, exports: bool = False) -> dict:
+    """Removes the job record and its artifacts. Exports stay unless asked (``exports=1``),
+    and so does a source file the user pointed at on their own disk. A file the app
+    received by upload is the app's own copy and goes with the job, unless another job
+    still uses it."""
     uploaded_copy: Path | None = None
+    export_files: list[Path] = []
     with session_scope() as s:
         job = _job_or_404(s, job_id)
         if job.task is not None and job.task_started_at is not None:
@@ -444,8 +460,12 @@ def delete_job(job_id: int) -> dict:
         for clip in s.exec(select(Clip).where(Clip.job_id == job_id)).all():
             s.delete(clip)
         for export in s.exec(select(Export).where(Export.job_id == job_id)).all():
+            if exports and export.path:
+                export_files.append(Path(export.path))
             s.delete(export)
         s.delete(job)
+    for path in export_files:
+        remove_export_files(path)
     settings = get_settings()
     folder = settings.jobs_path / str(job_id)
     shutil.rmtree(folder, ignore_errors=True)
@@ -702,13 +722,8 @@ def list_clips(job_id: int) -> list[dict]:
 
 def _move_edges(clip: Clip, duration: float, src_in: float | None = None, src_out: float | None = None) -> None:
     """Set a clip's in or out point, keeping at least 0.2 s of its first and last segment."""
-    segments = [list(seg) for seg in clip.segments]
-    if src_in is not None:
-        segments[0][0] = round(max(0.0, min(float(src_in), segments[0][1] - 0.2)), 3)
-    if src_out is not None:
-        segments[-1][1] = round(min(duration, max(float(src_out), segments[-1][0] + 0.2)), 3)
-    clip.segments = segments
-    clip.src_in, clip.src_out = segments[0][0], segments[-1][1]
+    clip.segments = move_edges(clip.segments, duration, src_in, src_out)
+    clip.src_in, clip.src_out = clip.segments[0][0], clip.segments[-1][1]
 
 
 @router.patch("/clips/{clip_id}")

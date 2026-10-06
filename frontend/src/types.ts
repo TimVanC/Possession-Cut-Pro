@@ -112,6 +112,9 @@ export interface Job extends TaskProgress {
   } | null;
   summary: JobSummary | null;
   media_ready: boolean;
+  /** The newest finished export and how many there are; present on the list and the job page. */
+  latest_export?: ExportRecord | null;
+  export_count?: number;
   /** Which file the review player gets: the small preview copy, the original, or nothing playable yet. */
   media_source: "proxy" | "source" | null;
   preview: { wanted: boolean; ready: boolean; building: boolean; progress: number | null; failed: string | null } | null;

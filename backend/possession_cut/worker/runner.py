@@ -20,6 +20,7 @@ from ..ai.caption import CutFacts, make_caption
 from ..ai.claude import ClaudeClient
 from ..config import get_settings
 from ..db import Clip, Export, Job, session_scope, touch
+from ..edits import edit_key, move_edges
 from ..pipeline import templates as tmpl
 from ..pipeline.analyze import JobSpec, analyze
 from ..pipeline.calibration import Calibration, calibrate
@@ -127,7 +128,10 @@ def run_calibrate(job_id: int) -> None:
     cal, ref, mask = calibrate(
         probe, job_dir(job_id), adapter, get_engine(4), claude=claude, templates=templates,
         expected_teams=expected, progress=lambda f, m: ctx.progress(f, "calibrating", m),
+        should_stop=ctx.should_stop,
     )
+    if ctx.should_stop():
+        raise Cancelled()
     save_calibration(job_id, cal, ref, mask)
     with session_scope() as s:
         job = s.get(Job, job_id)
@@ -189,20 +193,37 @@ def run_analyze(job_id: int) -> None:
 
     with session_scope() as s:
         job = s.get(Job, job_id)
+        # what the owner changed last time carries over to the same plays: a clip turned
+        # off stays off, a moved edge moves the same amount from the new detected edge
+        prior: dict[tuple, tuple[bool, float, float]] = {}
         for old in s.exec(select(Clip).where(Clip.job_id == job_id)).all():
+            d_in, d_out = old.src_in - old.auto_in, old.src_out - old.auto_out
+            if not old.enabled or abs(d_in) > 1e-6 or abs(d_out) > 1e-6:
+                prior[edit_key(old.pbp_event_id, old.team, old.period, old.clock, old.kind, old.score_after)] = (old.enabled, d_in, d_out)
             s.delete(old)
         s.flush()
+        carried = 0
         for k, c in enumerate(result.clips):
             thumb = d / "thumbs" / f"{k:03d}.jpg"
+            segments = [list(seg) for seg in c.segments]
+            enabled = True
+            kept = prior.pop(edit_key(c.pbp_event_id, c.team, c.period, c.clock, c.kind, c.score_after), None)
+            if kept is not None:
+                enabled, d_in, d_out = kept
+                segments = move_edges(
+                    segments, probe.duration,
+                    c.src_in + d_in if abs(d_in) > 1e-6 else None, c.src_out + d_out if abs(d_out) > 1e-6 else None,
+                )
+                carried += 1
             s.add(
                 Clip(
-                    job_id=job_id, order=k, src_in=c.src_in, src_out=c.src_out,
-                    segments=[list(seg) for seg in c.segments],
+                    job_id=job_id, order=k, src_in=segments[0][0], src_out=segments[-1][1],
+                    segments=segments,
                     auto_segments=[list(seg) for seg in c.segments], auto_in=c.src_in, auto_out=c.src_out,
                     team=c.team, period=c.period, clock=c.clock, score_before=c.score_before,
                     score_after=c.score_after, score_away=c.score_away, score_home=c.score_home,
                     points=c.points, kind=c.kind, scorer=c.scorer, description=c.description,
-                    confidence=c.confidence, enabled=True, pbp_event_id=c.pbp_event_id,
+                    confidence=c.confidence, enabled=enabled, pbp_event_id=c.pbp_event_id,
                     warnings=list(c.warnings),
                     events=[{"t": ch.t, "points": ch.points, "team": ch.team, "clock": ch.clock, "period": ch.period,
                              "confidence": round(float(getattr(ch, "confidence", 1.0)), 3)}
@@ -210,6 +231,11 @@ def run_analyze(job_id: int) -> None:
                     thumbnail=str(thumb) if thumb.exists() else "",
                 )
             )
+        if carried or prior:
+            note = f"Kept your edits on {carried} clip{'s' if carried != 1 else ''} from the previous analysis"
+            if prior:
+                note += f"; {len(prior)} edited clip{'s' if len(prior) != 1 else ''} from that run {'are' if len(prior) != 1 else 'is'} no longer in the cut"
+            result.summary.setdefault("warnings", []).append(note + ".")
         job.summary = json.loads(json.dumps(result.summary, default=str))
         job.claude_spent_usd = claude.usage.cost_usd
         job.status = "review"
@@ -282,8 +308,12 @@ def run_export(job_id: int) -> None:
     overlay = render_overlay(title, caption_bar, plan.placement, work / "overlay.png")
 
     ctx.progress(0.01, "rendering", "Rendering", force=True)
-    render(plan, probe, out_path, overlay, work,
-           progress=lambda f, m: ctx.progress(0.95 * f, "rendering", m), should_stop=ctx.should_stop)
+    try:
+        render(plan, probe, out_path, overlay, work,
+               progress=lambda f, m: ctx.progress(0.95 * f, "rendering", m), should_stop=ctx.should_stop)
+    except BaseException:
+        out_path.unlink(missing_ok=True)  # a half-written file is never a valid video
+        raise
 
     ctx.progress(0.96, "caption", "Writing the caption", force=True)
     facts = CutFacts(**{k: v for k, v in (summary.get("facts") or {}).items() if k in CutFacts.__dataclass_fields__})

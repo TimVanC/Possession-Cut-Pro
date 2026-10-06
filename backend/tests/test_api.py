@@ -265,13 +265,25 @@ def test_auto_run_start_and_reanalysis_reuses_the_samples(app_env):
     assert clips and clips[0]["score_before"] == low["score_home"], "the cut starts with the first score after the low point"
     assert sum(c["points"] for c in clips) == 109 - low["score_home"], "and has every score after it"
 
+    # edits made before a re-run carry over to the same plays: one clip off, one edge moved
+    off, moved = clips[0], clips[1]
+    client.patch(f"/api/clips/{off['id']}", json={"enabled": False})
+    client.patch(f"/api/clips/{moved['id']}", json={"src_out": moved["src_out"] + 0.7})
+
     # change the options and re-run: the file is not sampled again
     client.patch(f"/api/jobs/{jid}", json={"start_spec": {"mode": "start"}, "options": {"include_opponent": True}})
     client.post(f"/api/jobs/{jid}/analyze")
     work()
     job = client.get(f"/api/jobs/{jid}").json()
     assert job["summary"]["sampler"] == {"cached": True, "samples": 770}
-    assert job["summary"]["clips"] == 14 and {c["team"] for c in client.get(f"/api/jobs/{jid}/clips").json()} == {"away", "home"}
+    again = client.get(f"/api/jobs/{jid}/clips").json()
+    assert job["summary"]["clips"] == 14 and {c["team"] for c in again} == {"away", "home"}
+    by_play = {c["pbp_event_id"]: c for c in again}
+    assert not by_play[off["pbp_event_id"]]["enabled"], "the clip turned off stays off"
+    kept = by_play[moved["pbp_event_id"]]
+    assert kept["edited"] and kept["src_out"] == pytest.approx(kept["auto_out"] + 0.7, abs=0.01), "the moved edge moved the same amount"
+    assert sum(1 for c in again if c["edited"] or not c["enabled"]) == 2, "nothing else was touched"
+    assert any(w.startswith("Kept your edits on 2 clips") for w in job["summary"]["warnings"])
 
 
 def test_cancel_and_failure_paths(app_env):

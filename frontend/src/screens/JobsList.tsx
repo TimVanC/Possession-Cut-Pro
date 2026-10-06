@@ -4,17 +4,22 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, url } from "../api";
 import { Note, Spinner, StatusBadge, TaskProgress, useHosted } from "../components";
 import { UploadBox } from "../Upload";
-import { formatBytes, formatDate, formatDuration, gameTitle, jobRoute } from "../lib";
+import { NEXT_STEP, formatBytes, formatDate, formatDuration, gameTitle, jobRoute } from "../lib";
 import type { Job } from "../types";
 
 function JobCard({ job }: { job: Job }) {
   const navigate = useNavigate();
   const client = useQueryClient();
+  const hosted = useHosted();
   const [confirming, setConfirming] = useState(false);
+  // on a server the exported videos share a small disk with everything else, so they go
+  // with the job unless kept on purpose; on your own computer they are yours to keep
+  const [withExports, setWithExports] = useState(hosted);
   const remove = useMutation({
-    mutationFn: () => api.deleteJob(job.id),
+    mutationFn: () => api.deleteJob(job.id, withExports && (job.export_count ?? 0) > 0),
     onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }),
   });
+  const latest = job.latest_export ?? null;
   const cancel = useMutation({
     mutationFn: () => api.cancelJob(job.id),
     onSuccess: () => client.invalidateQueries({ queryKey: ["jobs"] }),
@@ -46,6 +51,23 @@ function JobCard({ job }: { job: Job }) {
               {summary.clips} clips · {formatDuration(summary.runtime_seconds)} · from {summary.start_label.toLowerCase()}
             </div>
           )}
+          {!job.busy && <div className="mt-1 text-[13px] text-ink-300">Next: {NEXT_STEP[job.status]}</div>}
+          {latest && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+              {latest.url ? (
+                <a className="btn btn-sm btn-primary" href={url(`${latest.url}?download=true`)} download>
+                  Download the video
+                </a>
+              ) : (
+                <span className="text-ink-400">The video file was cleaned up; render it again from the review.</span>
+              )}
+              <span className="num text-ink-400">
+                {latest.title || latest.file_name} · {formatDate(latest.created_at ?? job.updated_at)}
+                {latest.duration != null && ` · ${formatDuration(latest.duration)}`}
+                {latest.size_bytes != null && ` · ${formatBytes(latest.size_bytes)}`}
+              </span>
+            </div>
+          )}
           {job.busy && (
             <div className="mt-3">
               <TaskProgress task={job} compact />
@@ -73,6 +95,12 @@ function JobCard({ job }: { job: Job }) {
               </button>
             ) : confirming ? (
               <>
+                {(job.export_count ?? 0) > 0 && (
+                  <label className="flex items-center gap-1 text-xs text-ink-300" title="The exported MP4s, cut lists and captions in the exports folder">
+                    <input type="checkbox" className="accent-court" checked={withExports} onChange={(e) => setWithExports(e.target.checked)} />
+                    also its {job.export_count} video{job.export_count === 1 ? "" : "s"}
+                  </label>
+                )}
                 <button className="btn btn-sm btn-danger" onClick={() => remove.mutate()} disabled={remove.isPending}>
                   Delete job
                 </button>

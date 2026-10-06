@@ -221,8 +221,16 @@ def test_uploads_and_exports_past_their_shelf_life_are_removed(settings, monkeyp
         session.flush()
         _export(session, 1, s.exports_path / "old_cut.mp4", age_days=45)
         _export(session, 1, s.exports_path / "new_cut.mp4", age_days=2)
+    # videos left behind by deleted jobs: no record, so their own age decides
+    stray_old, stray_new = s.exports_path / "stray_old.mp4", s.exports_path / "stray_new.mp4"
+    for f in (stray_old, stray_new, stray_old.with_name("stray_old.caption.txt")):
+        f.write_bytes(b"x")
+    os.utime(stray_old, (long_ago - 20 * 86400, long_ago - 20 * 86400))
+    os.utime(stray_old.with_name("stray_old.caption.txt"), (long_ago, long_ago))
 
-    assert janitor.sweep() == {"uploads": 2, "exports": 1}
+    assert janitor.sweep() == {"uploads": 2, "exports": 2}
+    assert not stray_old.exists() and not stray_old.with_name("stray_old.caption.txt").exists()
+    assert stray_new.exists(), "a recent stray is left alone"
     assert not old_upload.exists() and not orphan.exists()
     assert fresh_upload.exists() and busy_upload.exists(), "in use, or a job is working on it"
     assert unfinished.exists(), "unfinished uploads have their own clean-up"
@@ -284,3 +292,30 @@ def test_a_removed_export_says_so(hosted, settings):
     listed = hosted.get(f"/api/jobs/{job_id}/exports").json()[0]
     assert listed["url"] is None and listed["file_removed"] is True
     assert hosted.get(f"/api/exports/{export_id}/file").status_code == 404
+
+
+def test_deleting_a_job_can_take_its_videos_along(hosted, settings):
+    from possession_cut.db import Job, session_scope
+
+    hosted.post("/api/login", json={"password": PASSWORD})
+    with session_scope() as session:
+        job = Job(source_path="gone.mp4")
+        session.add(job)
+        session.flush()
+        _export(session, job.id, settings.exports_path / "first.mp4", age_days=3)
+        _export(session, job.id, settings.exports_path / "second.mp4", age_days=1)
+        job_id = job.id
+        other = Job(source_path="other.mp4")
+        session.add(other)
+        session.flush()
+        _export(session, other.id, settings.exports_path / "keep.mp4", age_days=1)
+        other_id = other.id
+    listed = hosted.get("/api/jobs").json()
+    mine = next(j for j in listed if j["id"] == job_id)
+    assert mine["export_count"] == 2 and mine["latest_export"]["file_name"] == "second.mp4", "the newest video is on the card"
+
+    assert hosted.delete(f"/api/jobs/{other_id}").status_code == 200
+    assert (settings.exports_path / "keep.mp4").exists(), "by default the videos stay"
+    assert hosted.delete(f"/api/jobs/{job_id}", params={"exports": 1}).status_code == 200
+    for name in ("first.mp4", "first.caption.txt", "first.cutlist.json", "second.mp4"):
+        assert not (settings.exports_path / name).exists(), name
