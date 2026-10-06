@@ -3,8 +3,23 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, use
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, url } from "../api";
 import { Note, Spinner, TaskProgress } from "../components";
-import { clamp, formatDuration, useDebounced, useJobEvents } from "../lib";
+import { clamp, formatDuration, looselySame, useDebounced, useJobEvents } from "../lib";
 import type { Box, Calibration, FieldRead } from "../types";
+
+/** A hint about why a field did not read, from what came back. Phrased as a guess: the owner decides. */
+function readReason(name: string, read: FieldRead | undefined): string {
+  const text = (read?.text ?? "").trim();
+  if (!text) return "Nothing was read inside this box. It may be empty here, or too loose: pull it in around the digits.";
+  if (name.endsWith("_score")) {
+    if (/[:.]/.test(text) || text.length > 3) return `Reads "${text}": the box may run into the next field. Pull its edge in.`;
+    if (/[A-Za-z]/.test(text)) return `Reads "${text}": letters in a score. The box may include a logo or a label.`;
+    return `Reads "${text}", which is not a score.`;
+  }
+  if (name === "clock") return `Reads "${text}": no M:SS or SS.t in it. Widen the box to the whole clock, or pull it off the shot clock.`;
+  if (name === "shot_clock") return `Reads "${text}": not a shot clock (0 to 35). The box may include part of the game clock.`;
+  if (name === "period") return `Reads "${text}": not a period. Fine during a break; pick a frame with the game on.`;
+  return `Reads "${text}".`;
+}
 
 const FIELD_COLORS: Record<string, string> = {
   away_label: "#94a3b8",
@@ -267,6 +282,28 @@ export default function CalibrationScreen() {
     placeholderData: (prev) => prev,
   });
   const reads: Record<string, FieldRead> = (dirty ? preview.data?.reads : frameInfo?.reads) ?? frameInfo?.reads ?? {};
+  // how often each field reads cleanly across the sampled frames that show the bug
+  const rates = useMemo(() => {
+    const out: Record<string, { ok: number; total: number; firstBad: number; texts: string[] }> = {};
+    for (const f of sportFields) {
+      const r = { ok: 0, total: 0, firstBad: -1, texts: [] as string[] };
+      (c?.frames ?? []).forEach((fr, i) => {
+        if (!fr.visible) return;
+        const read = fr.reads?.[f.name];
+        if (!read) return;
+        r.total += 1;
+        if (read.ok) r.ok += 1;
+        else if (r.firstBad < 0) r.firstBad = i;
+        r.texts.push(`${formatDuration(fr.time)}: ${read.text ? `"${read.text}"` : "nothing"}${read.ok ? "" : " ✗"}`);
+      });
+      out[f.name] = r;
+    }
+    return out;
+  }, [c, sportFields]);
+  const bugTeams = [c?.teams.away, c?.teams.home].filter((t): t is string => !!t);
+  const followSide = !job.data?.team
+    ? null
+    : looselySame(c?.teams.away, job.data.team) ? "away" : looselySame(c?.teams.home, job.data.team) ? "home" : null;
 
   const crop: Box = useMemo(() => {
     if (cropOverride) return cropOverride;
@@ -402,6 +439,13 @@ export default function CalibrationScreen() {
             {c.source === "template" ? `template “${c.template_name}”` : c.source === "claude" ? "Claude vision" : c.source === "manual" ? "hand" : "the on-device detector"}{" "}
             · confidence <span className="num text-ink-100">{Math.round(c.confidence * 100)}%</span>
           </p>
+          {bugTeams.length > 0 && (
+            <p className={`mt-1 text-[13px] ${followSide || !j.team ? "text-ink-300" : "text-amber-300"}`}>
+              Bug reads <span className="num font-semibold text-ink-100">{bugTeams.join(" · ")}</span>.
+              {j.team && followSide && ` You follow ${j.team}: ${followSide === "away" ? "listed first" : "listed second"}.`}
+              {j.team && !followSide && ` You follow ${j.team}, which is neither of them. Check the game and team in setup.`}
+            </p>
+          )}
         </div>
         <div className="ml-auto flex gap-2">
           <button className="btn" onClick={() => redetect.mutate()} disabled={redetect.isPending} title="Ignore saved templates and locate the bug from scratch">
@@ -497,9 +541,21 @@ export default function CalibrationScreen() {
                     >
                       <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: FIELD_COLORS[f.name] ?? "#e5e7eb" }} />
                       <span className="flex-1 capitalize">{fieldLabel(f.name)}</span>
+                      {has && !isLabel && rates[f.name] && rates[f.name].total > 0 && (
+                        <button
+                          className={`num text-xs ${rates[f.name].ok / rates[f.name].total < 0.7 ? "text-red-300" : "text-ink-400"} hover:underline`}
+                          title={`Read in ${rates[f.name].ok} of ${rates[f.name].total} sampled frames that show the bug:\n${rates[f.name].texts.join("\n")}${rates[f.name].firstBad >= 0 ? "\nClick to see the first frame it failed on." : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (rates[f.name].firstBad >= 0) setFrame(rates[f.name].firstBad);
+                          }}
+                        >
+                          {rates[f.name].ok} of {rates[f.name].total}
+                        </button>
+                      )}
                       {has ? (
                         <>
-                          <span className={`num font-semibold ${ok ? "text-ink-100" : "text-red-300"}`}>{read?.text || (f.required ? "unreadable" : "blank")}</span>
+                          <span className={`num font-semibold ${ok ? "text-ink-100" : "text-red-300"}`} title={ok ? undefined : readReason(f.name, read)}>{read?.text || (f.required ? "unreadable" : "blank")}</span>
                           {!f.required && (
                             <button className="text-xs text-ink-400 hover:text-red-300" onClick={(e) => { e.stopPropagation(); removeField(f.name); }} title="This bug does not show this field">
                               ✕
@@ -512,12 +568,13 @@ export default function CalibrationScreen() {
                         </button>
                       )}
                     </div>
+                    {has && !ok && f.required && <p className="px-2 pb-1 text-xs text-amber-200/90">{readReason(f.name, read)}</p>}
                   </li>
                 );
               })}
             </ul>
             <p className="mt-2 text-xs text-ink-400">
-              Values are what OCR reads in this frame. Score boxes need room for three digits.
+              Values are what OCR reads in this frame; the count is how many sampled frames read cleanly. Score boxes need room for three digits.
             </p>
           </div>
 

@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from ..ai.claude import ClaudeClient, ClaudeError
-from ..sports.base import SportAdapter
+from ..sports.base import SportAdapter, same_team_code
 from .bugreader import CHARSETS, VISIBLE_THRESHOLD, BugReader, build_reference
 from .calib_claude import detect_with_claude
 from .calib_local import LocalDetector, separate_fields, size_field_boxes, snap_to_text
@@ -364,8 +364,23 @@ def calibrate(
         built = reference_from_frames(frames, visible, tuple(cal.bug), {k: tuple(v) for k, v in cal.fields.items()})
         ref, mask = built if built else (None, None)
     validate(cal, adapter, frames, times, files, engine, ref, mask)
+    check_teams(cal, expected_teams)
     step(1.0, "Calibration ready")
     return cal, ref, mask
+
+
+def check_teams(cal: Calibration, expected_teams: dict[str, str] | None) -> None:
+    """A wrong game or year is cheapest to catch here: the bug's team labels against the
+    picked game's codes."""
+    if not expected_teams or not (expected_teams.get("away") and expected_teams.get("home")):
+        return
+    labels = [v for v in cal.teams.values() if v]
+    codes = [expected_teams["away"], expected_teams["home"]]
+    if labels and not any(same_team_code(label, code) for label in labels for code in codes):
+        cal.warnings.append(
+            f"The bug reads {' / '.join(labels)}, but the game picked is {codes[0]} at {codes[1]}. "
+            "Check the date and the game in setup."
+        )
 
 
 # (top, bottom, left, right) as fractions of the box's own height and width

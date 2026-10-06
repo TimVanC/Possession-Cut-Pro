@@ -83,3 +83,17 @@ def test_a_box_that_reads_an_extra_digit_is_pulled_in(ocr_engine):
     assert notes == ["The away score box was pulled in so it reads cleanly."]
     assert after[2] < before[2] and after[2] * fw <= 480, "the right edge no longer covers the next number"
     assert after[0] * fw <= 425, "the digits themselves are still inside"
+
+
+def test_a_bug_that_names_other_teams_than_the_picked_game_is_flagged():
+    from possession_cut.pipeline.calibration import check_teams
+
+    cal = Calibration(bug=[0, 0, 1, 1], fields={}, crop=[0, 0, 1, 1], frame_width=1280, frame_height=720, teams={"away": "CLE", "home": "GS"})
+    check_teams(cal, {"away": "CLE", "home": "GSW"})
+    assert cal.warnings == [], "GS is the Warriors"
+    check_teams(cal, {"away": "SAS", "home": "NYK"})
+    assert cal.warnings and cal.warnings[0].startswith("The bug reads CLE / GS, but the game picked is SAS at NYK")
+    blank = Calibration(bug=[0, 0, 1, 1], fields={}, crop=[0, 0, 1, 1], frame_width=1280, frame_height=720)
+    check_teams(blank, {"away": "SAS", "home": "NYK"})
+    check_teams(cal, None)
+    assert blank.warnings == [] and len(cal.warnings) == 1, "no labels, or no game: nothing to compare"

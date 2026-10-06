@@ -20,7 +20,7 @@ import numpy as np
 
 from ..ai.caption import CutFacts, suggested_title
 from ..ai.claude import ClaudeClient
-from ..sports.base import PlayByPlayUnavailable, ScoringEvent, SportAdapter
+from ..sports.base import PlayByPlayUnavailable, ScoringEvent, SportAdapter, same_team_code
 from .calibration import Calibration
 from .camera import refine_clips
 from .clips import ClipDraft, build_clips
@@ -55,12 +55,7 @@ class AnalysisResult:
     follow_side: str
 
 
-def _loosely_same(a: str, b: str) -> bool:
-    """'NY' ~ 'NYK', 'SA' ~ 'SAS', 'KNICKS' ~ 'NYK' is not attempted."""
-    a, b = a.strip().upper(), b.strip().upper()
-    if not a or not b:
-        return False
-    return a == b or a.startswith(b) or b.startswith(a) or (len(a) >= 2 and len(b) >= 2 and a[:2] == b[:2])
+_loosely_same = same_team_code
 
 
 def resolve_side(spec: JobSpec, cal: Calibration, pbp_sides: dict[str, str]) -> tuple[str, list[str]]:

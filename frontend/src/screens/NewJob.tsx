@@ -123,8 +123,26 @@ export default function NewJob() {
 
   const startClockValue = parseClock(startClock);
   const endClockValue = parseClock(endClock);
+  // the same arithmetic the engine uses for game time: regulation periods, then 5-minute overtimes
+  const periodLength = (p: number) => (sportInfo ? (p <= sportInfo.periods ? sportInfo.period_seconds : 300) : Infinity);
+  const elapsedOf = (p: number, clock: number) => {
+    let done = 0;
+    for (let i = 1; i < p; i++) done += periodLength(i);
+    return done + Math.max(0, periodLength(p) - clock);
+  };
+  const hasClock = sportInfo?.has_clock !== false;
+  const startTooLong = hasClock && startMode === "game_time" && startClockValue !== null && startClockValue > periodLength(startPeriod);
+  const endTooLong = hasClock && endMode === "game_time" && endClockValue !== null && endClockValue > periodLength(endPeriod);
+  const endBeforeStart =
+    hasClock && startMode === "game_time" && endMode === "game_time" && startClockValue !== null && endClockValue !== null &&
+    elapsedOf(endPeriod, endClockValue) <= elapsedOf(startPeriod, startClockValue);
+  const runAfterEnd =
+    hasClock && startMode === "auto_run" && endMode === "game_time" && endClockValue !== null && !!runStart.data?.available &&
+    runStart.data.period != null && runStart.data.clock != null && elapsedOf(runStart.data.period, runStart.data.clock) >= elapsedOf(endPeriod, endClockValue);
   const clockErrors =
-    (startMode === "game_time" && startClockValue === null) || (endMode === "game_time" && endClockValue === null);
+    (startMode === "game_time" && startClockValue === null) || (endMode === "game_time" && endClockValue === null) ||
+    startTooLong || endTooLong || endBeforeStart || runAfterEnd;
+  const periodTooLong = (p: number) => `${periodLabel(p, sportInfo?.period_label, sportInfo?.periods)} has ${formatClock(periodLength(p))} at most`;
 
   const setup = (): JobSetup => {
     const start_spec: StartSpec =
@@ -354,6 +372,7 @@ export default function NewJob() {
               </select>
               <input className={`field num w-28 ${startClockValue === null ? "border-red-700" : ""}`} value={startClock} onChange={(e) => setStartClock(e.target.value)} placeholder="2:26" aria-label="Start clock" />
               {startClockValue === null && <span className="text-xs text-red-300">Use M:SS, like 2:26</span>}
+              {startTooLong && <span className="text-xs text-red-300">{periodTooLong(startPeriod)}</span>}
             </div>
           )}
           {startMode === "auto_run" && (
@@ -392,7 +411,11 @@ export default function NewJob() {
                     <option key={p} value={p}>{periodLabel(p, sportInfo?.period_label, sportInfo?.periods)}</option>
                   ))}
                 </select>
-                <input className={`field num w-28 ${endClockValue === null ? "border-red-700" : ""}`} value={endClock} onChange={(e) => setEndClock(e.target.value)} aria-label="End clock" />
+                <input className={`field num w-28 ${endClockValue === null || endTooLong || endBeforeStart || runAfterEnd ? "border-red-700" : ""}`} value={endClock} onChange={(e) => setEndClock(e.target.value)} aria-label="End clock" />
+                {endClockValue === null && <span className="text-xs text-red-300">Use M:SS, like 2:26</span>}
+                {endTooLong && <span className="text-xs text-red-300">{periodTooLong(endPeriod)}</span>}
+                {endBeforeStart && <span className="text-xs text-red-300">The end point is not after the start point</span>}
+                {runAfterEnd && <span className="text-xs text-red-300">The biggest run starts after this end point</span>}
               </span>
             )}
           </div>
@@ -405,6 +428,7 @@ export default function NewJob() {
           <Toggle checked={opponent} onChange={setOpponent} label="Opponent scores" hint="Both teams' scoring possessions, in game order." />
           <Toggle checked={gameCamera} onChange={setGameCamera} label="Game camera only" hint="Trims crowd shots and close-ups off the start and end of each clip." />
           <Toggle checked={defense} onChange={setDefense} label="Defensive plays" hint="Blocks and steals by your team as short clips, in game order. Needs the game picked above." />
+          {defense && !game && <Note tone="warn">Pick the game above, or no blocks and steals can be added: they come from the play-by-play.</Note>}
         </div>
       </section>
 

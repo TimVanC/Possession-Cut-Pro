@@ -66,6 +66,14 @@ class ScoringEvent:
         return cls(**known)
 
 
+def same_team_code(a: str, b: str) -> bool:
+    """'NY' ~ 'NYK', 'SA' ~ 'SAS', 'GS' ~ 'GSW'; 'KNICKS' ~ 'NYK' is not attempted."""
+    a, b = a.strip().upper(), b.strip().upper()
+    if not a or not b:
+        return False
+    return a == b or a.startswith(b) or b.startswith(a) or (len(a) >= 2 and len(b) >= 2 and a[:2] == b[:2])
+
+
 @dataclass
 class ScoreChange:
     """A score change read off the bug (pipeline output, sport-agnostic)."""

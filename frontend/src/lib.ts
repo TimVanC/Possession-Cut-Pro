@@ -76,6 +76,14 @@ export const STATUS_TEXT: Record<JobStatus, string> = {
   failed: "Failed",
 };
 
+/** Whether a team code read off the bug is the same team as a league code: "NY" ~ "NYK", "GS" ~ "GSW". */
+export function looselySame(a: string | undefined, b: string | undefined): boolean {
+  const x = (a ?? "").trim().toUpperCase();
+  const y = (b ?? "").trim().toUpperCase();
+  if (!x || !y) return false;
+  return x === y || x.startsWith(y) || y.startsWith(x) || (x.length >= 2 && y.length >= 2 && x.slice(0, 2) === y.slice(0, 2));
+}
+
 /** What the owner does next with a job in this state, for the jobs list. */
 export const NEXT_STEP: Record<JobStatus, string> = {
   draft: "Fill in the game setup",
