@@ -5,14 +5,31 @@ import { Modal, Note, Spinner, TaskProgress, Toggle, useHosted } from "../compon
 import { formatBytes, formatDate, formatDuration, useJobEvents } from "../lib";
 import type { ExportRecord, Job } from "../types";
 
+const AUDIO_CHOICES: { key: "broadcast" | "levelled" | "none"; label: string; hint: string }[] = [
+  { key: "broadcast", label: "Broadcast sound", hint: "The game's audio as it is." },
+  { key: "levelled", label: "Levelled", hint: "Loudness evened out to about what Instagram, TikTok and YouTube normalise to, so crowd roars and quiet stretches sit closer together." },
+  { key: "none", label: "Silent", hint: "No sound, for laying music over the cut." },
+];
+
 function Result({ record }: { record: ExportRecord }) {
   const [copied, setCopied] = useState(false);
+  const [copiedStamps, setCopiedStamps] = useState(false);
   const reveal = useMutation({ mutationFn: () => api.revealExport(record.id) });
+  const timestamps = typeof record.settings.timestamps === "string" ? record.settings.timestamps : "";
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(record.caption);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked: the text is selectable below */
+    }
+  };
+  const copyTimestamps = async () => {
+    try {
+      await navigator.clipboard.writeText(timestamps);
+      setCopiedStamps(true);
+      setTimeout(() => setCopiedStamps(false), 1500);
     } catch {
       /* clipboard blocked: the text is selectable below */
     }
@@ -43,6 +60,13 @@ function Result({ record }: { record: ExportRecord }) {
           <button className="btn" onClick={copy}>{copied ? "Copied" : "Copy caption"}</button>
           {!hosted && <button className="btn" onClick={() => reveal.mutate()}>Reveal in folder</button>}
         </div>
+        {timestamps && (
+          <div>
+            <span className="label">Timestamps (YouTube chapters; the MP4 carries them too)</span>
+            <textarea readOnly className="field h-24 resize-none text-[12px] leading-relaxed" value={timestamps} />
+            <button className="btn btn-sm mt-1" onClick={copyTimestamps}>{copiedStamps ? "Copied" : "Copy timestamps"}</button>
+          </div>
+        )}
         {reveal.error && <Note tone="error">{(reveal.error as Error).message}</Note>}
       </div>
     </div>
@@ -66,6 +90,7 @@ export default function ExportDialog({
   const [title, setTitle] = useState(summary?.suggested_title ?? "");
   const [caption, setCaption] = useState(defaultCaption);
   const [crossfade, setCrossfade] = useState(true);
+  const [audio, setAudio] = useState<"broadcast" | "levelled" | "none">("broadcast");
   const [showing, setShowing] = useState<number | null>(null);
   // sport-specific export toggles (baseball's home run trot)
   const sports = useQuery({ queryKey: ["sports"], queryFn: api.sports, staleTime: 60_000 });
@@ -87,7 +112,7 @@ export default function ExportDialog({
         title,
         caption,
         audio_crossfade: crossfade,
-        options: Object.fromEntries(sportOptions.map((o) => [o.key, extra[o.key] ?? o.default])),
+        options: { ...Object.fromEntries(sportOptions.map((o) => [o.key, extra[o.key] ?? o.default])), audio },
       }),
     onSuccess: (record) => {
       setShowing(record.id);
@@ -141,7 +166,26 @@ export default function ExportDialog({
             <label className="label" htmlFor="caption">Small caption (bottom bar, optional)</label>
             <input id="caption" className="field" value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="2026 NBA Finals, Game 4" />
           </div>
-          <Toggle checked={crossfade} onChange={setCrossfade} label="Audio crossfade at cuts" hint="A short blend of the broadcast audio at each cut so there are no pops. Video cuts stay hard." />
+          <div>
+            <span className="label">Sound</span>
+            <div className="flex flex-wrap gap-2">
+              {AUDIO_CHOICES.map((c) => (
+                <button
+                  key={c.key}
+                  className={`btn btn-sm ${audio === c.key ? "border-court text-court" : ""}`}
+                  onClick={() => setAudio(c.key)}
+                  aria-pressed={audio === c.key}
+                  title={c.hint}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1 text-xs text-ink-400">{AUDIO_CHOICES.find((c) => c.key === audio)?.hint}</p>
+          </div>
+          {audio !== "none" && (
+            <Toggle checked={crossfade} onChange={setCrossfade} label="Audio crossfade at cuts" hint="A short blend of the broadcast audio at each cut so there are no pops. Video cuts stay hard." />
+          )}
           {sportOptions.map((o) => (
             <Toggle
               key={o.key}

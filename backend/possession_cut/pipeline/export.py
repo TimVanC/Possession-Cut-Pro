@@ -37,6 +37,9 @@ MAX_INPUTS = 48  # segments per ffmpeg run; longer cuts are rendered in batches
 CRF = 18
 AUDIO_BITRATE = "192k"
 DEFAULT_CROSSFADE_MS = 80
+AUDIO_CHOICES = ("broadcast", "levelled", "none")
+# about what Instagram, TikTok and YouTube normalise to; applied once over the whole cut
+LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 
 class ExportError(RuntimeError):
@@ -62,6 +65,9 @@ class ExportPlan:
     placement: tuple[int, int, int]  # scaled_w, scaled_h, y offset on the canvas
     half: float  # half the audio crossfade, seconds (0 = hard audio cuts)
     notes: list[str] = field(default_factory=list)
+    # "broadcast": the game's sound as it is; "levelled": loudness evened out for the
+    # platforms; "none": a silent track, for music laid over the cut
+    audio: str = "broadcast"
 
     @property
     def duration(self) -> float:
@@ -80,6 +86,7 @@ class ExportPlan:
             "canvas": [OUTPUT_W, OUTPUT_H],
             "video_on_canvas": {"w": self.placement[0], "h": self.placement[1], "y": self.placement[2]},
             "audio_crossfade_ms": round(self.crossfade * 1000, 1),
+            "audio": self.audio,
             "segments": [
                 {"src_in": round(s.src_in, 4), "src_out": round(s.src_in + s.duration(self.fps), 4), "frames": s.n_frames}
                 for s in self.segments
@@ -93,8 +100,11 @@ def plan_export(
     crop_norm: list[float],
     crossfade: bool = True,
     crossfade_ms: float = DEFAULT_CROSSFADE_MS,
+    audio: str = "broadcast",
 ) -> ExportPlan:
     """Snap segments to source frames and work out the geometry."""
+    if audio not in AUDIO_CHOICES:
+        raise ValueError(f"audio must be one of {', '.join(AUDIO_CHOICES)}")
     fps = Fraction(probe.fps_num, probe.fps_den)
     frame = float(1 / fps)
     total_frames = int(probe.duration * fps)
@@ -123,6 +133,7 @@ def plan_export(
         crop=crop,
         placement=output_placement(crop[2], crop[3]),
         half=half,
+        audio=audio,
     )
 
 
@@ -287,7 +298,7 @@ def build_batch(
         graph.append(f"[vcat]{','.join(chain)},format=yuv420p[vout]")
 
     total = sum(s.duration(fps) for s in segs)
-    if probe.has_audio:
+    if probe.has_audio and plan.audio != "none":
         graph += a_lines
         prev = "a0"
         for j in range(1, n):
@@ -302,6 +313,8 @@ def build_batch(
             tail.append("afade=t=in:st=0:d=0.02")
         if last < len(plan.segments) - 1:
             tail.append(f"afade=t=out:st={_fnum(max(0.0, total - 0.02))}:d=0.02")
+        if plan.audio == "levelled" and final:
+            tail.append(LOUDNORM)  # a batched render levels in the final join instead
         graph.append(f"[{prev}]{','.join(tail) if tail else 'anull'}[aout]")
         audio_map = ["-map", "[aout]"]
     else:
@@ -354,8 +367,10 @@ def render(
     workdir: Path | None = None,
     progress: Callable[[float, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    chapters: list[tuple[float, float, str]] | None = None,
 ) -> Path:
-    """Render the plan to ``out_path``."""
+    """Render the plan to ``out_path``. ``chapters``: (start, end, title) in output
+    seconds, written into the MP4 so players and YouTube can list the clips."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     workdir = workdir or out_path.parent
     workdir.mkdir(parents=True, exist_ok=True)
@@ -364,6 +379,13 @@ def render(
     n = len(plan.segments)
     total = plan.duration
     t0 = time.time()
+    meta_path = write_chapters(workdir / "export_chapters.txt", chapters) if chapters else None
+
+    def with_chapters(inputs: list[str]) -> tuple[list[str], list[str]]:
+        """The metadata file as one more input, mapped onto the output."""
+        if meta_path is None:
+            return inputs, []
+        return [*inputs, "-i", str(meta_path)], ["-map_metadata", str(inputs.count("-i"))]
 
     best = [0.0]
 
@@ -376,7 +398,8 @@ def render(
 
     if n <= MAX_INPUTS:
         inputs, graph, out_args = build_batch(plan, probe, 0, n - 1, overlay, final=True)
-        cmd = [*base, *inputs, *_graph_args(graph, workdir, "export_graph.txt"), *out_args, *report, str(out_path)]
+        inputs, meta_map = with_chapters(inputs)
+        cmd = [*base, *inputs, *_graph_args(graph, workdir, "export_graph.txt"), *out_args, *meta_map, *report, str(out_path)]
         _run(cmd, total, lambda f: tell(f, 0.0, total), should_stop)
     else:
         parts: list[Path] = []
@@ -393,10 +416,12 @@ def render(
         listing = workdir / "export_parts.txt"
         listing.write_text("".join(f"file '{p.as_posix()}'\n" for p in parts), encoding="utf-8")
         # video is copied; audio is encoded once over the whole cut, so there are no AAC seams
+        inputs, meta_map = with_chapters(["-f", "concat", "-safe", "0", "-i", str(listing)])
         cmd = [
-            *base, "-f", "concat", "-safe", "0", "-i", str(listing),
-            "-c:v", "copy", "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000", "-ac", "2",
-            "-movflags", "+faststart", str(out_path),
+            *base, *inputs,
+            "-c:v", "copy", *(["-af", LOUDNORM] if plan.audio == "levelled" else []),
+            "-c:a", "aac", "-b:a", AUDIO_BITRATE, "-ar", "48000", "-ac", "2",
+            *meta_map, "-movflags", "+faststart", str(out_path),
         ]
         _run(cmd, total, None, should_stop)
         for p in parts:
@@ -410,16 +435,73 @@ def render(
 # -- sidecars -----------------------------------------------------------------------------
 
 
-def write_cutlist(path: Path, meta: dict, clips: list[dict], plan: ExportPlan) -> None:
-    """cutlist.json: every clip with source in/out, game time, score, scorer, confidence."""
+def cutlist_rows(clips: list[dict]) -> list[dict]:
+    """Each clip with where it lands in the output (``out_start``, ``out_end``)."""
     out_t = 0.0
     rows = []
     for clip in clips:
         dur = iv.total([tuple(s) for s in clip["segments"]])
         rows.append({**clip, "out_start": round(out_t, 3), "out_end": round(out_t + dur, 3)})
         out_t += dur
+    return rows
+
+
+def write_cutlist(path: Path, meta: dict, clips: list[dict], plan: ExportPlan) -> list[dict]:
+    """cutlist.json: every clip with source in/out, game time, score, scorer, confidence.
+    Returns the rows it wrote."""
+    rows = cutlist_rows(clips)
     doc = {**meta, "render": plan.to_dict(), "clips": rows}
     path.write_text(json.dumps(doc, indent=1, default=str), encoding="utf-8")
+    return rows
+
+
+def _mmss(seconds: float) -> str:
+    s = int(seconds)
+    h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
+
+def _game_clock(clock: float | None) -> str:
+    if clock is None:
+        return ""
+    return f"{int(clock // 60)}:{int(clock % 60):02d}" if clock >= 60 else f"{clock:.1f}"
+
+
+def clip_title(row: dict, format_period: Callable[[int | None], str]) -> str:
+    """One line for a chapter or a timestamp: "Q3 9:40 · J. Brunson +3 · 55-81"."""
+    when = f"{format_period(row.get('period'))} {_game_clock(row.get('game_clock', row.get('clock')))}".strip()
+    who = row.get("scorer") or (row.get("description") or "").split(" (")[0].strip()
+    what = f"+{row['points']}" if row.get("points") else {"block": "block", "steal": "steal"}.get(row.get("kind", ""), "")
+    play = " ".join(x for x in (who, what) if x)
+    score = ""
+    if row.get("score_away") is not None and row.get("score_home") is not None:
+        score = f"{row['score_away']}-{row['score_home']}"
+    return " · ".join(x for x in (when, play, score) if x) or "Clip"
+
+
+def chapters_for(rows: list[dict], format_period: Callable[[int | None], str]) -> list[tuple[float, float, str]]:
+    return [(float(r["out_start"]), float(r["out_end"]), clip_title(r, format_period)) for r in rows]
+
+
+def timestamps_block(rows: list[dict], format_period: Callable[[int | None], str]) -> str:
+    """The YouTube-style list: a time and a line per clip, the first at 0:00."""
+    return "\n".join(f"{_mmss(r['out_start'])} {clip_title(r, format_period)}" for r in rows)
+
+
+def _meta_escape(text: str) -> str:
+    return "".join("\\" + ch if ch in "=;#\\" else ch for ch in text.replace("\n", " "))
+
+
+def write_chapters(path: Path, chapters: list[tuple[float, float, str]]) -> Path:
+    """An ffmetadata file with one chapter per clip."""
+    lines = [";FFMETADATA1"]
+    for start, end, title in chapters:
+        if end - start < 0.01:
+            continue
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(round(start * 1000))}", f"END={int(round(end * 1000))}", f"title={_meta_escape(title)}"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 # -- helpers used around export -------------------------------------------------------------

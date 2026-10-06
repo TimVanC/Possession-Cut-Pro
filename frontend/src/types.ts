@@ -205,6 +205,8 @@ export interface ExportRecord {
   url: string | null;
   /** Rendered, but the file has since been cleaned up to free space. */
   file_removed: boolean;
+  /** What the render was asked for and what it did: caption, audio, timestamps, the plan. */
+  settings: Record<string, unknown>;
   created_at: string;
 }
 

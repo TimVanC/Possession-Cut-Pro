@@ -349,3 +349,58 @@ def test_thumbnail_and_preview_proxy(coverage_probe, coverage_calibration, tmp_p
     proxy = probe_file(make_proxy(src, tmp_path / "proxy.mp4"))
     assert proxy.browser_playable and proxy.audio_codec == "aac" and proxy.video_codec == "h264"
     assert proxy.duration == pytest.approx(src.duration, abs=0.15) and (proxy.width, proxy.height) == (1280, 720)
+
+
+# -- audio choice, chapters and timestamps -----------------------------------------------
+
+
+def test_audio_choice_changes_the_graph():
+    probe = fake_probe()
+    segs = [(10, 20), (30, 34)]
+    plain = build_batch(plan_export(probe, segs, CROP), probe, 0, 1, None, final=True)
+    levelled = build_batch(plan_export(probe, segs, CROP, audio="levelled"), probe, 0, 1, None, final=True)
+    silent = build_batch(plan_export(probe, segs, CROP, audio="none"), probe, 0, 1, None, final=True)
+    assert ex.LOUDNORM not in plain[1] and ex.LOUDNORM in levelled[1], "levelled audio is normalised once, over the whole cut"
+    assert "anullsrc" in " ".join(silent[0]) and "acrossfade" not in silent[1], "a silent track replaces the broadcast sound"
+    intermediate = build_batch(plan_export(probe, segs, CROP, audio="levelled"), probe, 0, 1, None, final=False)
+    assert ex.LOUDNORM not in intermediate[1], "a batched render levels in the final join, not per part"
+    with pytest.raises(ValueError):
+        plan_export(probe, segs, CROP, audio="loud")
+    assert plan_export(probe, segs, CROP, audio="none").to_dict()["audio"] == "none"
+
+
+def test_clip_titles_timestamps_and_chapter_file(tmp_path):
+    nba = get_adapter("nba")
+    rows = ex.cutlist_rows([
+        {"segments": [[100.0, 110.0]], "period": 3, "game_clock": 580.0, "scorer": "J. Brunson", "points": 3,
+         "kind": "field_goal", "score_away": 55, "score_home": 81, "description": "J. Brunson 25' 3PT (22 PTS)"},
+        {"segments": [[200.0, 204.0], [206.0, 209.5]], "period": 5, "game_clock": 12.4, "scorer": "", "points": 0,
+         "kind": "steal", "score_away": None, "score_home": None, "description": "M. Bridges STEAL"},
+    ])
+    assert rows[0]["out_start"] == 0.0 and rows[1]["out_start"] == 10.0 and rows[1]["out_end"] == 17.5
+    assert ex.clip_title(rows[0], nba.format_period) == "Q3 9:40 · J. Brunson +3 · 55-81"
+    assert ex.clip_title(rows[1], nba.format_period) == "OT 12.4 · M. Bridges STEAL steal"
+    block = ex.timestamps_block(rows, nba.format_period)
+    assert block.startswith("0:00 Q3 9:40 · J. Brunson +3 · 55-81\n0:10 OT 12.4"), "the first line is 0:00, as YouTube wants"
+    path = ex.write_chapters(tmp_path / "chapters.txt", ex.chapters_for(rows, nba.format_period))
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=10000\ntitle=Q3 9:40 · J. Brunson +3 · 55-81\n")
+    assert "START=10000\nEND=17500" in text
+    assert ex._meta_escape("a=b;c#d" + chr(92) + "e") == "a" + chr(92) + "=b" + chr(92) + ";c" + chr(92) + "#d" + chr(92) * 2 + "e"
+
+
+@pytest.mark.video
+def test_chapters_land_in_the_video(coverage_probe, coverage_calibration, tmp_path):
+    cal, *_ = coverage_calibration
+    plan = plan_export(coverage_probe, [(5.0, 8.0), (20.0, 23.0)], cal.crop)
+    out = ex.render(plan, coverage_probe, tmp_path / "chapters.mp4", None, tmp_path / "work",
+                    chapters=[(0.0, 3.0, "Q1 11:30 · A. Player +2 · 2-0"), (3.0, 6.0, "Q1 11:00 · B. Player +3 · 2-3")])
+    raw = subprocess.run(
+        [ffprobe_bin(), "-v", "error", "-print_format", "json", "-show_chapters", str(out)],
+        capture_output=True, text=True, encoding="utf-8", check=True,
+    ).stdout
+    chapters = json.loads(raw)["chapters"]
+    assert [c["tags"]["title"] for c in chapters] == ["Q1 11:30 · A. Player +2 · 2-0", "Q1 11:00 · B. Player +3 · 2-3"]
+    assert float(chapters[1]["start_time"]) == pytest.approx(3.0, abs=0.01)
+    fmt = ffprobe_json(out)["format"]
+    assert fmt["format_name"].startswith("mov") and float(fmt["duration"]) == pytest.approx(6.0, abs=0.2)

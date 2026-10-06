@@ -24,7 +24,16 @@ from ..edits import edit_key, move_edges
 from ..pipeline import templates as tmpl
 from ..pipeline.analyze import JobSpec, analyze
 from ..pipeline.calibration import Calibration, calibrate
-from ..pipeline.export import make_proxy, plan_export, render, render_overlay, write_cutlist
+from ..pipeline.export import (
+    chapters_for,
+    cutlist_rows,
+    make_proxy,
+    plan_export,
+    render,
+    render_overlay,
+    timestamps_block,
+    write_cutlist,
+)
 from ..pipeline.ocr import get_engine
 from ..pipeline.probe import Probe, probe_file
 from ..preview import part_path, proxy_path
@@ -298,7 +307,11 @@ def run_export(job_id: int) -> None:
         probe, segments, cal.crop,
         crossfade=bool(opts.get("audio_crossfade", True)),
         crossfade_ms=float(opts.get("crossfade_ms", 80)),
+        audio=str(opts.get("audio") or "broadcast"),
     )
+    rows = cutlist_rows(clip_rows)
+    chapters = chapters_for(rows, adapter.format_period)
+    timestamps = timestamps_block(rows, adapter.format_period)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     base = f"{_safe_name(title or summary.get('suggested_title') or Path(source_name).stem)}_{stamp}"
     out_path = settings.exports_path / f"{base}.mp4"
@@ -310,7 +323,8 @@ def run_export(job_id: int) -> None:
     ctx.progress(0.01, "rendering", "Rendering", force=True)
     try:
         render(plan, probe, out_path, overlay, work,
-               progress=lambda f, m: ctx.progress(0.95 * f, "rendering", m), should_stop=ctx.should_stop)
+               progress=lambda f, m: ctx.progress(0.95 * f, "rendering", m), should_stop=ctx.should_stop,
+               chapters=chapters)
     except BaseException:
         out_path.unlink(missing_ok=True)  # a half-written file is never a valid video
         raise
@@ -322,7 +336,7 @@ def run_export(job_id: int) -> None:
     facts.plays = [r["description"] for r in clip_rows if r["description"]][-4:]
     caption_text, caption_source = make_caption(facts, claude)
     caption_path = settings.exports_path / f"{base}.caption.txt"
-    caption_path.write_text(caption_text + "\n", encoding="utf-8")
+    caption_path.write_text(f"{caption_text}\n\nTimestamps\n{timestamps}\n", encoding="utf-8")
 
     cutlist_path = settings.exports_path / f"{base}.cutlist.json"
     write_cutlist(
@@ -345,7 +359,7 @@ def run_export(job_id: int) -> None:
         export.cutlist_path = str(cutlist_path)
         export.duration = plan.duration
         export.size_bytes = out_path.stat().st_size
-        export.settings = {**opts, "caption_source": caption_source, "render": plan.to_dict()}
+        export.settings = {**opts, "caption_source": caption_source, "render": plan.to_dict(), "timestamps": timestamps}
         s.add(export)
         job = s.get(Job, job_id)
         job.claude_spent_usd = claude.usage.cost_usd
