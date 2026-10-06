@@ -38,7 +38,7 @@ then starts quietly in the background every time you log in, and the page just w
 1. **Upload.** Drop the game file on the page or click to choose it. MP4, MKV or TS, 480p or better. A 5 GB game takes about a minute. If the upload is interrupted it resumes where it stopped.
    If the file is already on the computer running the engine you can pick it from disk instead and skip the copy, or drop it in `inbox/`.
 2. **Game setup.** Pick the sport, find the game by date, choose the team to follow, and choose where the cut starts: the start of the game, a game time (Q3 2:26), or automatically at the team's largest deficit.
-3. **Calibrate.** The app finds the score bug and shows what it reads in each field. A box that reads poorly is pulled in automatically until it reads; drag the boxes if anything is still off, then confirm. The layout is saved as a broadcaster template and reused next time.
+3. **Calibrate.** The app finds the score bug and shows what it reads in each field, with how many sampled frames each field read cleanly and a hint when one does not. A box that reads poorly is pulled in automatically until it reads; drag the boxes if anything is still off, then confirm. It also shows the team names it reads against the team you follow, and warns when they do not match the game picked. The layout is saved as a broadcaster template and reused next time.
 4. **Analyze.** A 2.5 hour broadcast takes roughly 5 to 10 minutes.
 5. **Review.** Every clip with its score, scorer and confidence. Toggle clips off, nudge in and out points, watch the whole cut in sequence.
 
@@ -51,10 +51,21 @@ then starts quietly in the background every time you log in, and the page just w
    | `{` / `}` | out point 0.5 s earlier / later |
    | `Alt` + `[` / `]` | every clip's in point 0.5 s earlier / later (with `Shift`: every out point) |
 
+   | `I` / `O` | in / out point at the playhead |
+   | `,` / `.` | a frame back / forward (`←` `→` a second, with `Shift` five) |
+   | `M` | jump to the make |
+   | `S` | playback speed 1x / 1.5x / 2x |
+   | `Ctrl` + `Z` | undo (`Ctrl` + `Shift` + `Z` redo) |
+
    "Every clip" under the player moves all the clips in the cut at once, and "Reset all
    edges" puts every clip back where the analysis found it without changing which are on.
+   Chips above the list narrow it (one team, baskets, free throws, blocks and steals,
+   warnings, under 70%, off, edited) and "Least confident first" sorts it; "Turn these N
+   off / on" acts on what is shown. A white dot on the scrubber marks where each score
+   showed on the bug, and the confidence badge says why it is what it is. Re-running the
+   analysis keeps the clips you turned off and the edges you moved on the same plays.
 
-6. **Export.** Set the title and render. The MP4 lands in `exports/` with `…cutlist.json` and `…caption.txt` beside it.
+6. **Export.** Set the title, choose the sound (broadcast as it is, levelled for the platforms, or silent for music) and render. The MP4 lands in `exports/` with `…cutlist.json` and `…caption.txt` beside it. Every clip is a chapter in the MP4, and the caption file ends with the same list as YouTube timestamps. The jobs list shows the newest video of each job with a Download button.
 
 ## Where things live
 

@@ -183,6 +183,41 @@ scores", and let calibration run. Setting `ANTHROPIC_API_KEY` on the Railway ser
 (Variables) is still worth doing: Claude vision reads unusual layouts better than the
 built-in detector and writes the captions. The cut you reviewed was made without it.
 
+## Upgrades round (2026-10-06)
+
+Asked for: a control to nudge every clip at once, "and any other changes". The every-clip
+control was built first (In and Out ±0.5 for the whole cut, Alt + brackets on the keyboard,
+"Reset all edges"). For the rest I had five reviewers each read one part of the app
+(review screen, setup and calibration, export, jobs list and upload, API and worker) and
+propose concrete upgrades with evidence from the code; the verification pass was cut
+short by a usage limit, so I picked from the proposals myself, favouring what a highlight
+editor would notice over what a developer would like. Not built, on purpose or for later:
+duplicating a job for the other team (the "Opponent scores" toggle covers most of it),
+re-attaching a fresh upload to a job after a server restart (worth doing; the biggest
+hosted annoyance left), a per-clip lower third drawn in the bottom bar (a day's work and
+a PRD change), splitting a long cut into parts, a worker watchdog, a plain-words failure
+mapping, and phone-width layouts.
+
+Built, in four commits:
+
+- **Review:** filter chips and a least-confident-first sort, "turn these N off / on",
+  undo and redo (Ctrl+Z) for every clip change through one bulk route, I and O to set an
+  edge at the playhead with frame and second stepping, make markers on the scrubber with
+  the reason behind each confidence badge, playback speed, cut-wide progress in the
+  sequence pass, and reopening on the clip left last time.
+- **Worker:** edits survive a re-analysis (matched by play-by-play event, else by period,
+  clock, kind and score), cancel stops calibration too and drops a cancelled export, a
+  missing game file fails at once in plain words, the jobs list shows the next step and
+  the newest video with Download, deleting a job can take its videos (the default on a
+  server), and the hosted sweep removes videos whose job is gone.
+- **Export:** sound choice (broadcast, levelled with loudnorm at -14 LUFS once over the
+  whole cut, or silent), chapters in the MP4, and a YouTube timestamp block in the
+  caption file and the export result.
+- **Setup and calibration:** per-field read counts across the sampled frames with a jump
+  to the first failing frame and a hint about why, the bug's team labels against the
+  followed team with a warning when neither matches the game picked, and form checks for
+  a clock past the period, an end before the start, and an end before the biggest run.
+
 ## Things I did differently from what was asked
 
 You asked to be told afterwards.
