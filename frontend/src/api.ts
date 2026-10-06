@@ -286,6 +286,9 @@ export const api = {
   updateClip: (id: number, body: { enabled?: boolean; src_in?: number; src_out?: number }) =>
     request<Clip>(`/api/clips/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   resetClip: (id: number) => request<Clip>(`/api/clips/${id}/reset`, { method: "POST" }),
+  nudgeClips: (jobId: number, body: { edge: "in" | "out"; delta: number; only_enabled?: boolean }) =>
+    request<Clip[]>(`/api/jobs/${jobId}/clips/nudge`, { method: "POST", body: JSON.stringify(body) }),
+  resetClips: (jobId: number) => request<Clip[]>(`/api/jobs/${jobId}/clips/reset`, { method: "POST" }),
 
   startExport: (id: number, body: { title: string; caption: string; audio_crossfade: boolean; options?: Record<string, unknown> }) =>
     request<ExportRecord>(`/api/jobs/${id}/export`, json(body)),

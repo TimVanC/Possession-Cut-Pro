@@ -49,6 +49,10 @@ then starts quietly in the background every time you log in, and the page just w
    | `X` | toggle the clip |
    | `[` / `]` | in point 0.5 s earlier / later |
    | `{` / `}` | out point 0.5 s earlier / later |
+   | `Alt` + `[` / `]` | every clip's in point 0.5 s earlier / later (with `Shift`: every out point) |
+
+   "Every clip" under the player moves all the clips in the cut at once, and "Reset all
+   edges" puts every clip back where the analysis found it without changing which are on.
 
 6. **Export.** Set the title and render. The MP4 lands in `exports/` with `…cutlist.json` and `…caption.txt` beside it.
 

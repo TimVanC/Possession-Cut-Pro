@@ -147,6 +147,12 @@ export default function Review() {
     onSuccess: setClipCache,
   });
   const reset = useMutation({ mutationFn: (id: number) => api.resetClip(id), onSuccess: setClipCache });
+  const setAllClips = (updated: Clip[]) => client.setQueriesData<Clip[]>({ queryKey: ["clips", jobId] }, () => updated);
+  const nudgeEvery = useMutation({
+    mutationFn: (body: { edge: "in" | "out"; delta: number }) => api.nudgeClips(jobId, body),
+    onSuccess: setAllClips,
+  });
+  const resetEvery = useMutation({ mutationFn: () => api.resetClips(jobId), onSuccess: setAllClips });
   const cancel = useMutation({ mutationFn: () => api.cancelJob(jobId), onSuccess: () => client.invalidateQueries({ queryKey: ["job", jobId] }) });
 
   const seek = useCallback((t: number) => {
@@ -255,6 +261,26 @@ export default function Review() {
     [patch, seek, state],
   );
 
+  // the same move for every clip in the cut; the player shows the selected clip's new edge
+  const nudgeAll = useCallback(
+    (edge: "in" | "out", delta: number) => {
+      nudgeEvery.mutate(
+        { edge, delta },
+        {
+          onSuccess: (updated) => {
+            const clip = state.current.current;
+            const mine = clip && updated.find((c) => c.id === clip.id);
+            if (!mine) return;
+            setMode("clip");
+            seek(edge === "in" ? mine.src_in : Math.max(mine.segments[mine.segments.length - 1][0], mine.src_out - 1.5));
+            void video.current?.play();
+          },
+        },
+      );
+    },
+    [nudgeEvery, seek, state],
+  );
+
   const toggle = useCallback(
     (clip: Clip | undefined) => clip && patch.mutate({ id: clip.id, body: { enabled: !clip.enabled } }),
     [patch],
@@ -266,6 +292,18 @@ export default function Review() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) && (target as HTMLInputElement).type !== "checkbox") return;
+      // Alt + bracket moves every clip's in point; with Shift (a brace), every out point.
+      // Matched on the physical key as well as the character: with Alt held, Mac keyboards
+      // produce other characters and some senders leave the code blank.
+      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+        const left = e.code === "BracketLeft" || e.key === "[" || e.key === "{";
+        const right = e.code === "BracketRight" || e.key === "]" || e.key === "}";
+        if (left || right) {
+          nudgeAll(e.shiftKey || e.key === "{" || e.key === "}" ? "out" : "in", left ? -NUDGE : NUDGE);
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const s = state.current;
       const wasPlaying = !!video.current && !video.current.paused;
@@ -304,7 +342,7 @@ export default function Review() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [exportOpen, nudge, select, state, toggle, togglePlay]);
+  }, [exportOpen, nudge, nudgeAll, select, state, toggle, togglePlay]);
 
   if (job.isLoading) return <Spinner />;
   if (job.error) return <Note tone="error">{(job.error as Error).message}</Note>;
@@ -470,6 +508,7 @@ export default function Review() {
             <span><kbd>X</kbd> toggle</span>
             <span><kbd>[</kbd> <kbd>]</kbd> in point</span>
             <span><kbd>{"{"}</kbd> <kbd>{"}"}</kbd> out point</span>
+            <span><kbd>Alt</kbd> + brackets: every clip</span>
           </div>
         </div>
 
@@ -549,6 +588,24 @@ export default function Review() {
                   <button className="btn btn-sm num" onClick={() => nudge("out", NUDGE)} aria-label="Out point half a second later">+0.5</button>
                   <span className="text-xs text-ink-400">Out</span>
                 </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-ink-400" title="Moves every clip that is in the cut by the same amount">
+                <span>Every clip:</span>
+                <div className="flex items-center gap-1">
+                  <span>In</span>
+                  <button className="btn btn-sm num" disabled={nudgeEvery.isPending} onClick={() => nudgeAll("in", -NUDGE)} aria-label="Every in point half a second earlier">−0.5</button>
+                  <button className="btn btn-sm num" disabled={nudgeEvery.isPending} onClick={() => nudgeAll("in", NUDGE)} aria-label="Every in point half a second later">+0.5</button>
+                </div>
+                <div className="flex items-center gap-1">
+                  <button className="btn btn-sm num" disabled={nudgeEvery.isPending} onClick={() => nudgeAll("out", -NUDGE)} aria-label="Every out point half a second earlier">−0.5</button>
+                  <button className="btn btn-sm num" disabled={nudgeEvery.isPending} onClick={() => nudgeAll("out", NUDGE)} aria-label="Every out point half a second later">+0.5</button>
+                  <span>Out</span>
+                </div>
+                {clips.some((c) => c.edited) && (
+                  <button className="btn btn-sm" disabled={resetEvery.isPending} onClick={() => resetEvery.mutate()} title="Every clip back to the in and out points the analysis found; which clips are on stays as it is">
+                    Reset all edges
+                  </button>
+                )}
               </div>
               <div className="flex items-center justify-center gap-2">
                 <button

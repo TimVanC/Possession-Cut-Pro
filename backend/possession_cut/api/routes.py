@@ -700,6 +700,17 @@ def list_clips(job_id: int) -> list[dict]:
         return [clip_out(c) for c in clips]
 
 
+def _move_edges(clip: Clip, duration: float, src_in: float | None = None, src_out: float | None = None) -> None:
+    """Set a clip's in or out point, keeping at least 0.2 s of its first and last segment."""
+    segments = [list(seg) for seg in clip.segments]
+    if src_in is not None:
+        segments[0][0] = round(max(0.0, min(float(src_in), segments[0][1] - 0.2)), 3)
+    if src_out is not None:
+        segments[-1][1] = round(min(duration, max(float(src_out), segments[-1][0] + 0.2)), 3)
+    clip.segments = segments
+    clip.src_in, clip.src_out = segments[0][0], segments[-1][1]
+
+
 @router.patch("/clips/{clip_id}")
 def update_clip(clip_id: int, body: ClipUpdate) -> dict:
     with session_scope() as s:
@@ -708,20 +719,52 @@ def update_clip(clip_id: int, body: ClipUpdate) -> dict:
             raise HTTPException(404, "Clip not found")
         job = s.get(Job, clip.job_id)
         duration = float((job.probe or {}).get("duration") or 1e12)
-        segments = [list(seg) for seg in clip.segments]
         if body.enabled is not None:
             clip.enabled = body.enabled
-        if body.src_in is not None:
-            new_in = max(0.0, min(float(body.src_in), segments[0][1] - 0.2))
-            segments[0][0] = round(new_in, 3)
-        if body.src_out is not None:
-            new_out = min(duration, max(float(body.src_out), segments[-1][0] + 0.2))
-            segments[-1][1] = round(new_out, 3)
-        clip.segments = segments
-        clip.src_in, clip.src_out = segments[0][0], segments[-1][1]
+        _move_edges(clip, duration, body.src_in, body.src_out)
         s.add(clip)
         s.flush()
         return clip_out(clip)
+
+
+class ClipsNudge(BaseModel):
+    edge: str = Field(pattern="^(in|out)$")
+    delta: float = Field(ge=-5.0, le=5.0)
+    only_enabled: bool = True
+
+
+@router.post("/jobs/{job_id}/clips/nudge")
+def nudge_clips(job_id: int, body: ClipsNudge) -> list[dict]:
+    """Move the in or out point of every clip in the cut by the same amount."""
+    with session_scope() as s:
+        job = _job_or_404(s, job_id)
+        duration = float((job.probe or {}).get("duration") or 1e12)
+        clips = s.exec(select(Clip).where(Clip.job_id == job_id).order_by(Clip.order)).all()
+        for clip in clips:
+            if body.only_enabled and not clip.enabled:
+                continue
+            if body.edge == "in":
+                _move_edges(clip, duration, src_in=clip.segments[0][0] + body.delta)
+            else:
+                _move_edges(clip, duration, src_out=clip.segments[-1][1] + body.delta)
+            s.add(clip)
+        s.flush()
+        return [clip_out(c) for c in clips]
+
+
+@router.post("/jobs/{job_id}/clips/reset")
+def reset_clips(job_id: int) -> list[dict]:
+    """Every clip back to its detected in and out points. Which clips are on is left alone."""
+    with session_scope() as s:
+        _job_or_404(s, job_id)
+        clips = s.exec(select(Clip).where(Clip.job_id == job_id).order_by(Clip.order)).all()
+        for clip in clips:
+            if clip.auto_segments:
+                clip.segments = [list(seg) for seg in clip.auto_segments]
+                clip.src_in, clip.src_out = clip.segments[0][0], clip.segments[-1][1]
+                s.add(clip)
+        s.flush()
+        return [clip_out(c) for c in clips]
 
 
 @router.post("/clips/{clip_id}/reset")

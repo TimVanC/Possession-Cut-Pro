@@ -162,6 +162,22 @@ def test_full_flow(app_env):
     reset = client.post(f"/api/clips/{c1['id']}/reset").json()
     assert reset["src_in"] == c1["src_in"] and reset["src_out"] == c1["src_out"] and not reset["edited"]
 
+    # every clip at once: the clips in the cut move together, the rest stay; a reset keeps the toggles
+    before = client.get(f"/api/jobs/{jid}/clips").json()
+    moved = client.post(f"/api/jobs/{jid}/clips/nudge", json={"edge": "in", "delta": -0.5}).json()
+    for b, m in zip(before, moved, strict=True):
+        if b["enabled"]:
+            assert m["src_in"] == pytest.approx(max(0.0, b["src_in"] - 0.5)) and m["edited"]
+        else:
+            assert m["src_in"] == b["src_in"] and not m["edited"]
+    moved = client.post(f"/api/jobs/{jid}/clips/nudge", json={"edge": "out", "delta": 0.5}).json()
+    assert moved[0]["src_out"] == pytest.approx(before[0]["src_out"] + 0.5)
+    assert client.post(f"/api/jobs/{jid}/clips/nudge", json={"edge": "sideways", "delta": 0.5}).status_code == 422
+    assert client.post(f"/api/jobs/{jid}/clips/nudge", json={"edge": "in", "delta": 60}).status_code == 422
+    back = client.post(f"/api/jobs/{jid}/clips/reset").json()
+    assert [c["enabled"] for c in back] == [c["enabled"] for c in before], "which clips are on is untouched"
+    assert all(not c["edited"] for c in back) and back[0]["src_in"] == before[0]["src_in"]
+
     # the source streams with HTTP range support
     part = client.get(f"/api/media/{jid}/source", headers={"Range": "bytes=100-299"})
     assert part.status_code == 206 and len(part.content) == 200

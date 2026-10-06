@@ -113,6 +113,11 @@ def main() -> int:
         except (AttributeError, ValueError):
             pass
 
+    # A preview launcher (the Claude desktop app's, for one) hands the page's port to this
+    # process as PORT, which is the API's cue on a hosting service. Here it is Vite's port:
+    # the API must not take it, or the two fight over :5173.
+    if os.environ.get("PORT") == "5173" and not os.environ.get("API_PORT") and not os.environ.get("HOSTED"):
+        os.environ.pop("PORT")
     settings = get_settings()
     settings.ensure_dirs()
     pid_file = settings.data_path / "engine.pid"
