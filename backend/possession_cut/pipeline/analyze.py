@@ -233,7 +233,25 @@ def analyze(
                 ch.extra["pbp"] = [e.to_dict() for e in m.events]
     window = resolve_window(tl, events, adapter, follow, spec.start_spec, spec.end_spec, pbp, matches)
     warnings.extend(window.notes or [])
-    clips = build_clips(tl, events, adapter, follow, spec.options, t_min=window.t_min, t_max=window.t_max)
+    defense: list[tuple[float, str, ScoringEvent]] = []
+    if spec.options.get("include_defense") and pbp is not None:
+        if sidecar is not None or not spec.game_id:
+            warnings.append("Defensive plays need the league's play-by-play; none were added.")
+        else:
+            try:
+                want = pbp_sides.get(follow, "").upper()
+                for play in adapter.fetch_defense(spec.game_id):
+                    if play.team.upper() != want:
+                        continue
+                    t = time_at_game_time(tl, adapter, play.period, play.clock)
+                    if t is not None:
+                        defense.append((t, follow, play))
+            except PlayByPlayUnavailable as exc:
+                warnings.append(f"Defensive plays unavailable: {exc}")
+            except Exception as exc:  # the cut must not sink over a side feature
+                log.exception("defensive plays failed")
+                warnings.append(f"Defensive plays failed ({type(exc).__name__}).")
+    clips = build_clips(tl, events, adapter, follow, spec.options, t_min=window.t_min, t_max=window.t_max, defense=defense)
     label_clips(clips, matches)
 
     # -- 6b. the bug cannot see what the director shows: keep clip edges on the game camera

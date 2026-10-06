@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
 
-from ..sports.base import ScoreChange, SportAdapter
+from ..sports.base import ScoreChange, ScoringEvent, SportAdapter
 from . import intervals as iv
 from .timeline import Timeline
 
@@ -24,7 +24,11 @@ DEFAULT_OPTIONS = {
     "include_opponent": False,
     # trim crowd shots and close-ups off clip edges (pipeline/camera.py; needs the video)
     "trim_cutaways": True,
+    # blocks and steals by the followed team as short clips (needs play-by-play)
+    "include_defense": False,
 }
+DEFENSE_BEFORE, DEFENSE_AFTER = 3.0, 4.0  # a block or steal: the shot or pass, the play, the run-out
+DEFENSE_KINDS = ("block", "steal")
 
 
 @dataclass
@@ -92,8 +96,13 @@ def build_clips(
     options: dict | None = None,
     t_min: float | None = None,
     t_max: float | None = None,
+    defense: list[tuple[float, str, ScoringEvent]] | None = None,
 ) -> list[ClipDraft]:
-    """Clips for the followed side (and the opponent if asked) between two video times."""
+    """Clips for the followed side (and the opponent if asked) between two video times.
+
+    ``defense``: (video time, side, play) for each block or steal to include. One that
+    leads straight to a score merges into that score's clip; the rest stand alone.
+    """
     opts = {**DEFAULT_OPTIONS, **(options or {})}
     sides = {follow} | ({"home" if follow == "away" else "away"} if opts["include_opponent"] else set())
     pre_roll, _post_roll = adapter.default_rolls
@@ -197,6 +206,28 @@ def build_clips(
         drafts.append(draft)
         clip_of[e.index] = draft
 
+    for t, side, play in defense or []:
+        if (t_min is not None and t < t_min) or (t_max is not None and t > t_max) or side not in sides:
+            continue
+        i = tl.index_at(t)
+        away = tl.value_near(tl.score_away, i, 4)
+        home = tl.value_near(tl.score_home, i, 4)
+        own = home if side == "home" else away
+        stand_in = ScoreChange(
+            index=-1, team=side, points=0, t=t, t_prev=t, period=play.period, clock=play.clock, clock_before=play.clock,
+            score_before=0 if own != own else int(own), score_after=0 if own != own else int(own),
+            score_away=0 if away != away else int(away), score_home=0 if home != home else int(home),
+        )
+        drafts.append(
+            ClipDraft(
+                team=side, kind=play.kind, points=0, period=play.period, clock=play.clock,
+                score_before=stand_in.score_before, score_after=stand_in.score_after,
+                score_away=stand_in.score_away, score_home=stand_in.score_home,
+                segments=[[t - DEFENSE_BEFORE, t + DEFENSE_AFTER]], changes=[stand_in], start_cause="defense",
+                scorer=play.scorer, description=play.description, pbp_event_id=play.event_id,
+            )
+        )
+
     # guards that apply to every clip
     not_live = tl.not_live_intervals
     kept: list[ClipDraft] = []
@@ -217,8 +248,10 @@ def build_clips(
             m.changes.extend(d.changes)
             m.segments = [[a, b] for a, b in iv.merge([tuple(s) for s in m.segments + d.segments])]
             m.warnings.extend(w for w in d.warnings if w not in m.warnings)
-            if d.kind != "free_throws":
-                m.kind = d.kind
+            if d.kind != "free_throws" and (d.kind not in DEFENSE_KINDS or m.kind in DEFENSE_KINDS):
+                m.kind = d.kind  # a score outranks the steal that set it up
+            if not m.description and d.description:
+                m.description, m.scorer, m.pbp_event_id = d.description, d.scorer, d.pbp_event_id
         elif merged and d.src_in <= merged[-1].src_out:
             # overlapping clips of different teams: keep both, cut at the boundary
             d.segments[0][0] = merged[-1].src_out

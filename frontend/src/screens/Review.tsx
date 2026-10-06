@@ -8,7 +8,7 @@ import type { Box, Clip, Job } from "../types";
 import ExportDialog from "./ExportDialog";
 
 const NUDGE = 0.5;
-const KIND_TEXT: Record<string, string> = { free_throws: "FT", field_goal: "", touchdown: "TD", goal: "Goal", run: "Run" };
+const KIND_TEXT: Record<string, string> = { free_throws: "FT", field_goal: "", touchdown: "TD", goal: "Goal", run: "Run", block: "BLK", steal: "STL" };
 
 type Mode = "clip" | "sequence" | "free";
 
@@ -78,7 +78,7 @@ function ClipRow({
           <span className="num font-semibold">
             {abbr} {clip.score_before} → {clip.score_after}
           </span>
-          <span className="num rounded bg-court/15 px-1.5 text-[11px] font-bold text-court">+{clip.points}</span>
+          {clip.points > 0 && <span className="num rounded bg-court/15 px-1.5 text-[11px] font-bold text-court">+{clip.points}</span>}
           {kind && <span className="rounded bg-ink-700 px-1.5 text-[11px] font-semibold text-ink-300">{kind}</span>}
           {clip.edited && <span className="text-[11px] text-sky-300" title="In or out point was nudged">edited</span>}
         </div>

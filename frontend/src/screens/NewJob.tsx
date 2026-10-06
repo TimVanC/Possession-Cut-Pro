@@ -44,6 +44,7 @@ export default function NewJob() {
   const [andOne, setAndOne] = useState(true);
   const [opponent, setOpponent] = useState(false);
   const [gameCamera, setGameCamera] = useState(true);
+  const [defense, setDefense] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   // editing an existing job (an inbox draft, or changing options before re-analysis)
@@ -76,6 +77,7 @@ export default function NewJob() {
     setAndOne(job.options.include_and_one_ft ?? true);
     setOpponent(job.options.include_opponent ?? false);
     setGameCamera(job.options.trim_cutaways ?? true);
+    setDefense(job.options.include_defense ?? false);
   }, [existing.data, loaded]);
 
   const sportInfo = sports.data?.find((s) => s.key === sport);
@@ -134,6 +136,7 @@ export default function NewJob() {
         include_and_one_ft: andOne,
         include_opponent: opponent,
         trim_cutaways: gameCamera,
+        include_defense: defense,
       },
     };
   };
@@ -384,6 +387,7 @@ export default function NewJob() {
           <Toggle checked={andOne} onChange={setAndOne} label="And-one free throw" hint="Tacked onto its basket as a short trailing segment." />
           <Toggle checked={opponent} onChange={setOpponent} label="Opponent scores" hint="Both teams' scoring possessions, in game order." />
           <Toggle checked={gameCamera} onChange={setGameCamera} label="Game camera only" hint="Trims crowd shots and close-ups off the start and end of each clip." />
+          <Toggle checked={defense} onChange={setDefense} label="Defensive plays" hint="Blocks and steals by your team as short clips, in game order. Needs the game picked above." />
         </div>
       </section>
 

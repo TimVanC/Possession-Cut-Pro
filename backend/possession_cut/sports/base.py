@@ -136,6 +136,12 @@ class SportAdapter(ABC):
     def fetch_pbp(self, game_id: str) -> list[ScoringEvent]:
         """Normalized scoring events for one game, in game order."""
 
+    def fetch_defense(self, game_id: str) -> list[ScoringEvent]:
+        """Blocks and steals from play-by-play, for the "defensive plays" option: ``kind``
+        "block" or "steal", ``points`` 0, ``team`` the defending side, ``scorer`` the
+        player. Sports whose records have no such plays return nothing."""
+        return []
+
     def teams(self) -> list[dict[str, str]]:
         """Known teams: [{'abbr': 'NYK', 'name': 'New York Knicks'}, ...]."""
         return []

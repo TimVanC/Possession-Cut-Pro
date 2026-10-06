@@ -34,6 +34,7 @@ export interface JobOptions {
   include_and_one_ft?: boolean;
   include_opponent?: boolean;
   trim_cutaways?: boolean;
+  include_defense?: boolean;
   [key: string]: unknown;
 }
 

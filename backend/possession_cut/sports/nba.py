@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import statistics
 import time
 from typing import TYPE_CHECKING
@@ -199,6 +200,78 @@ def normalize_actions(actions: list[dict]) -> list[ScoringEvent]:
     return events
 
 
+DEFENSE_IN_TEXT = re.compile(r"\b(STEAL|BLOCK)\b")
+ESPN_DEFENSE = re.compile(r"\(([^()]+?) (steals|blocks)\)")  # "... turnover (Josh Hart steals)"
+ESPN_BLOCK = re.compile(r"^(.+?) blocks ")  # "Mitchell Robinson blocks Dylan Harper's layup"
+
+
+def normalize_defense(actions: list[dict]) -> list[ScoringEvent]:
+    """Blocks and steals from an NBA action list. cdn.nba.com has them as their own
+    actions; stats.nba.com leaves the type blank and says it in the description."""
+    out: list[ScoringEvent] = []
+    for action in actions:
+        kind = (action.get("actionType") or "").lower()
+        if kind not in ("steal", "block"):
+            found = DEFENSE_IN_TEXT.search((action.get("description") or "").upper())
+            if not found or (action.get("actionType") or ""):
+                continue
+            kind = found.group(1).lower()
+        out.append(
+            ScoringEvent(
+                event_id=str(action.get("actionNumber", len(out))),
+                period=int(action.get("period") or 0),
+                clock=http.parse_iso_clock(action.get("clock")),
+                team=(action.get("teamTricode") or "").upper(),
+                points=0,
+                scorer=action.get("playerNameI") or action.get("playerName") or "",
+                description=(action.get("description") or "").strip(),
+                score_away=_int(action.get("scoreAway")),
+                score_home=_int(action.get("scoreHome")),
+                kind=kind,
+                extra={},
+            )
+        )
+    return out
+
+
+def normalize_espn_defense(summary: dict) -> list[ScoringEvent]:
+    """Blocks and steals from an ESPN summary, where they sit inside the shot or
+    turnover they caused: "... turnover (Julian Champagnie steals)"."""
+    comp = ((summary.get("header") or {}).get("competitions") or [{}])[0]
+    code_of: dict[str, str] = {}
+    for c in comp.get("competitors") or []:
+        team_id = str((c.get("team") or {}).get("id") or c.get("id") or "")
+        code_of[team_id] = espn_tricode((c.get("team") or {}).get("abbreviation"))
+    out: list[ScoringEvent] = []
+    for play in summary.get("plays") or []:
+        text = " ".join((play.get("text") or "").split())
+        found = ESPN_DEFENSE.search(text)
+        if found:
+            player, kind = found.group(1).strip(), "steal" if found.group(2) == "steals" else "block"
+        elif blocked := ESPN_BLOCK.match(text):
+            player, kind = blocked.group(1).strip(), "block"
+        else:
+            continue
+        offence = str((play.get("team") or {}).get("id") or "")
+        team = next((code for tid, code in code_of.items() if tid != offence), "")  # the defence
+        out.append(
+            ScoringEvent(
+                event_id=f"{play.get('id') or play.get('sequenceNumber') or len(out)}d",
+                period=int((play.get("period") or {}).get("number") or 0),
+                clock=http.parse_iso_clock((play.get("clock") or {}).get("displayValue")),
+                team=team,
+                points=0,
+                scorer=_initial_name(player),
+                description=f"{_initial_name(player)} {kind.upper()}",
+                score_away=_int(play.get("awayScore")),
+                score_home=_int(play.get("homeScore")),
+                kind=kind,
+                extra={},
+            )
+        )
+    return out
+
+
 def teams_from_events(events: list[ScoringEvent]) -> dict[str, str]:
     """{'away': 'SAS', 'home': 'NYK'} as seen in the scoring events."""
     out: dict[str, str] = {}
@@ -233,6 +306,9 @@ class NBAAdapter(SportAdapter):
     period_label = "Q"
     shot_clock_max = 24.0
     shot_clock_resets = (24.0, 14.0)
+    def __init__(self) -> None:
+        self._defense: dict[str, list[ScoringEvent]] = {}
+
     # The shot clock resets as the ball drops; the score follows later. How much later
     # depends on the broadcast: 0.5-2 s on some, 2.2-3.8 s on ESPN/ABC's bug. A reset this
     # close before the score is the make itself, and nothing from it on can be the start
@@ -321,8 +397,12 @@ class NBAAdapter(SportAdapter):
             events = normalize_espn_plays(summary)
             if not events:
                 raise PlayByPlayUnavailable(f"ESPN has no plays for {game_id}")
+            defense = normalize_espn_defense(summary)
+            self._defense[game_id] = defense
             if espn_game_finished(summary):
-                http.write_cache("nba", cache_name, {"source": "espn", "events": [e.to_dict() for e in events]})
+                http.write_cache("nba", cache_name, {
+                    "source": "espn", "events": [e.to_dict() for e in events], "defense": [e.to_dict() for e in defense],
+                })
             return events
         if not _nba_com_reachable():
             raise PlayByPlayUnavailable("NBA.com is not answering from this server; pick the game again to use ESPN's data")
@@ -353,10 +433,22 @@ class NBAAdapter(SportAdapter):
             raise PlayByPlayUnavailable(f"NBA play-by-play for {game_id} is unavailable ({'; '.join(errors)})")
 
         events = normalize_actions(actions)
+        defense = normalize_defense(actions)
+        self._defense[game_id] = defense
         finished = any((a.get("actionType") or "").lower() == "game" for a in actions) or source != "cdn"
         if events and finished:
-            http.write_cache("nba", cache_name, {"source": source, "events": [e.to_dict() for e in events]})
+            http.write_cache("nba", cache_name, {
+                "source": source, "events": [e.to_dict() for e in events], "defense": [e.to_dict() for e in defense],
+            })
         return events
+
+    def fetch_defense(self, game_id: str) -> list[ScoringEvent]:
+        cached = http.read_cache("nba", f"pbp_{game_id.replace(':', '_')}.json")
+        if cached is not None and "defense" in cached:
+            return [ScoringEvent.from_dict(e) for e in cached["defense"]]
+        if game_id not in self._defense:
+            self.fetch_pbp(game_id)  # fetches and remembers both
+        return list(self._defense.get(game_id, []))
 
     @staticmethod
     def _nba_api_pbp(game_id: str) -> dict:

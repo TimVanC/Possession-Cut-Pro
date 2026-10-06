@@ -5,10 +5,10 @@ still open, and what to test first. Written at the end of the build (2026-10-05)
 
 ## Where it stands
 
-All eleven steps of the PRD's build order are in the repo, plus four things added after
-the first real run: uploading a game from the browser, a camera check that trims crowd
-shots off clip edges, progress steps with a time estimate, and a hosted copy on Railway
-behind a password.
+All eleven steps of the PRD's build order are in the repo, plus what was added after the
+first real run: uploading a game from the browser, a camera check that trims crowd shots
+off clip edges, progress steps with a time estimate, a hosted copy on Railway behind a
+password, ESPN as a second NBA data source, and a "defensive plays" option.
 
 | | State |
 | --- | --- |
@@ -242,6 +242,33 @@ You asked to be told afterwards.
 - **Shot clock reads are validated against physics**: it counts down in real time, holds,
   or jumps to a reset value. A reset must land on 24, 14, or one below with consistent
   reads after it.
+
+### Defensive plays (added on request, 2026-10-06)
+
+- **Blocks and steals** by the followed team become 7 s clips (3 s before the play to 4 s
+  after) when "Defensive plays" is on. They come from play-by-play: cdn.nba.com has them
+  as their own actions, stats.nba.com says "X STEAL" in a description with a blank type,
+  and ESPN writes them inside the shot or turnover ("... turnover (Josh Hart steals)",
+  "Mitchell Robinson blocks ..."). All three agree on the Finals game: 8 blocks, 16 steals.
+- **Video time** for each comes from the game clock through the bug's timeline, the same
+  way game-time start points do, so it is good to about half a second.
+- **A steal that leads straight to a score joins that score's clip** (the clip then starts
+  3 s before the steal and is labelled by the score). One with no score after it stands
+  alone with "STL" or "BLK" and no points.
+- Not available for a synthetic game's sidecar play-by-play, and untested on real footage
+  through the app: the clip builder is tested on the scripted game and the parsers on the
+  recorded Finals data.
+
+### ESPN as a second NBA source (2026-10-06)
+
+- NBA.com refuses cloud servers: from Railway stats.nba.com stalls and cdn.nba.com answers
+  403 (checked from the server itself). The lookup now tries stats.nba.com once with an
+  8 s timeout, then uses ESPN's scoreboard; a game found there (id `espn:<event>`) takes
+  play-by-play from ESPN's summary. ESPN's team codes (SA, NY, GS, NO, UTAH, WSH) are
+  translated to the NBA's. After one failure NBA.com is left alone for ten minutes.
+- ESPN's 109 scoring plays for the Finals game agree with NBA.com's play for play, and
+  the auto start point comes out the same. Verified from Railway: the lookup returns the
+  game and its 109 plays.
 
 ### Camera check
 

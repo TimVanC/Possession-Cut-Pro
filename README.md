@@ -82,6 +82,13 @@ real broadcasts.
 Crowd shots and player close-ups at the start or end of a clip are trimmed off ("Game
 camera only" in game setup, on by default).
 
+**Defensive plays** (game setup, off by default) adds your team's blocks and steals as short
+clips in game order. A steal that leads straight to a score joins that score's clip. It
+needs the game picked in setup, since blocks and steals come from the play-by-play.
+
+Game lookup and play-by-play come from NBA.com, or from ESPN's public data when NBA.com
+does not answer (it refuses cloud servers), translated to NBA team codes.
+
 ## Tests and tools
 
 ```bash
